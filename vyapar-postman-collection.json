@@ -1,0 +1,1524 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Ventrix — Complete API",
+    "description": "Full Postman collection for the Ventrix multi-industry ERP SaaS.\n\n**Setup:**\n1. Set `baseUrl` variable → `http://localhost:8000`\n2. Run **Login** request — token is saved automatically via test script\n3. All subsequent requests use `{{token}}` automatically\n\n**Variables used:**\n- `baseUrl` — API server (default: http://localhost:8000)\n- `token` — JWT access token (auto-set on login)\n- `refreshToken` — JWT refresh token (auto-set on login)\n- `organizationId` — current org ID (auto-set on login)\n- `invoiceId`, `customerId`, `productId`, etc. — set from responses as you go",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "organizationId", "value": "", "type": "string" },
+    { "key": "customerId", "value": "", "type": "string" },
+    { "key": "supplierId", "value": "", "type": "string" },
+    { "key": "productId", "value": "", "type": "string" },
+    { "key": "invoiceId", "value": "", "type": "string" },
+    { "key": "purchaseId", "value": "", "type": "string" },
+    { "key": "quotationId", "value": "", "type": "string" },
+    { "key": "salesOrderId", "value": "", "type": "string" },
+    { "key": "paymentId", "value": "", "type": "string" },
+    { "key": "warehouseId", "value": "", "type": "string" },
+    { "key": "employeeId", "value": "", "type": "string" },
+    { "key": "bankAccountId", "value": "", "type": "string" },
+    { "key": "leadId", "value": "", "type": "string" },
+    { "key": "bomId", "value": "", "type": "string" },
+    { "key": "productionOrderId", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "🔐 Authentication",
+      "description": "Register, login, refresh tokens, Google OAuth, 2FA, password reset",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/register", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Adil\",\n  \"lastName\": \"Khan\",\n  \"email\": \"adil@example.com\",\n  \"password\": \"StrongPass@123\",\n  \"organizationName\": \"Adil Enterprises\",\n  \"phone\": \"9876543210\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 200) {",
+            "  const json = pm.response.json();",
+            "  pm.collectionVariables.set('token', json.data.accessToken);",
+            "  pm.collectionVariables.set('refreshToken', json.data.refreshToken);",
+            "  pm.collectionVariables.set('organizationId', json.data.organization?.id || '');",
+            "  console.log('✅ Token saved');",
+            "}"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/login", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"adil@example.com\",\n  \"password\": \"StrongPass@123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 200) {",
+            "  const json = pm.response.json();",
+            "  pm.collectionVariables.set('token', json.data.accessToken);",
+            "  pm.collectionVariables.set('refreshToken', json.data.refreshToken);",
+            "}"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","refresh"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/logout", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","logout"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" }
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","forgot-password"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"adil@example.com\"\n}" }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","reset-password"] },
+            "body": { "mode": "raw", "raw": "{\n  \"token\": \"RESET_TOKEN_FROM_EMAIL\",\n  \"password\": \"NewStrongPass@123\"\n}" }
+          }
+        },
+        {
+          "name": "Enable 2FA",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/2fa/enable", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","2fa","enable"] }
+          }
+        },
+        {
+          "name": "Verify 2FA",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/2fa/verify", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","2fa","verify"] },
+            "body": { "mode": "raw", "raw": "{\n  \"code\": \"123456\"\n}" }
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👤 Users & Profile",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me", "host": ["{{baseUrl}}"], "path": ["api","v1","users","me"] }
+          }
+        },
+        {
+          "name": "Update My Profile",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me", "host": ["{{baseUrl}}"], "path": ["api","v1","users","me"] },
+            "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Adil\",\n  \"lastName\": \"Khan\",\n  \"phone\": \"9876543210\"\n}" }
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me/change-password", "host": ["{{baseUrl}}"], "path": ["api","v1","users","me","change-password"] },
+            "body": { "mode": "raw", "raw": "{\n  \"currentPassword\": \"StrongPass@123\",\n  \"newPassword\": \"NewStrongPass@456\"\n}" }
+          }
+        },
+        {
+          "name": "Get My Sessions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me/sessions", "host": ["{{baseUrl}}"], "path": ["api","v1","users","me","sessions"] }
+          }
+        },
+        {
+          "name": "List All Users (Admin)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/users/admin", "host": ["{{baseUrl}}"], "path": ["api","v1","users","admin"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏢 Organization",
+      "item": [
+        {
+          "name": "Get Organization Profile",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations"] }
+          }
+        },
+        {
+          "name": "Update Organization",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Adil Enterprises Pvt Ltd\",\n  \"gstin\": \"27AABCU9603R1ZX\",\n  \"pan\": \"AABCU9603R\",\n  \"phone\": \"9876543210\",\n  \"email\": \"info@adilenterprises.com\",\n  \"address\": {\n    \"line1\": \"123 MG Road\",\n    \"city\": \"Mumbai\",\n    \"state\": \"Maharashtra\",\n    \"pincode\": \"400001\"\n  },\n  \"invoicePrefix\": \"INV\",\n  \"purchasePrefix\": \"PUR\",\n  \"financialYearStart\": 4\n}" }
+          }
+        },
+        {
+          "name": "List Members",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/members", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","members"] }
+          }
+        },
+        {
+          "name": "Invite Member",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/members/invite", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","members","invite"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"staff@example.com\",\n  \"role\": \"ACCOUNTANT\"\n}" }
+          }
+        },
+        {
+          "name": "Update Member Role",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/members/:userId/role", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","members",":userId","role"], "variable": [{ "key": "userId", "value": "USER_ID" }] },
+            "body": { "mode": "raw", "raw": "{\n  \"role\": \"MANAGER\"\n}" }
+          }
+        },
+        {
+          "name": "Remove Member",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/members/:userId", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","members",":userId"], "variable": [{ "key": "userId", "value": "USER_ID" }] }
+          }
+        },
+        {
+          "name": "List Branches",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/branches", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","branches"] }
+          }
+        },
+        {
+          "name": "Create Branch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/branches", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","branches"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Mumbai Branch\",\n  \"code\": \"MUM\",\n  \"address\": {\n    \"line1\": \"45 Andheri East\",\n    \"city\": \"Mumbai\",\n    \"state\": \"Maharashtra\",\n    \"pincode\": \"400069\"\n  }\n}" }
+          }
+        },
+        {
+          "name": "List Price Lists",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/price-lists", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","price-lists"] }
+          }
+        },
+        {
+          "name": "Create Price List",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/price-lists", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","price-lists"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Wholesale Price List\",\n  \"discountPercentage\": 10,\n  \"isDefault\": false\n}" }
+          }
+        },
+        {
+          "name": "List Payment Terms",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/payment-terms", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","payment-terms"] }
+          }
+        },
+        {
+          "name": "Get Audit Logs",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/organizations/audit-logs?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","organizations","audit-logs"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📊 Dashboard & Analytics",
+      "item": [
+        {
+          "name": "Dashboard Overview",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/dashboard", "host": ["{{baseUrl}}"], "path": ["api","v1","dashboard"] }
+          }
+        },
+        {
+          "name": "Analytics — Revenue Over Time",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/analytics?fromDate=2026-04-01&toDate=2026-06-30&period=monthly", "host": ["{{baseUrl}}"], "path": ["api","v1","analytics"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }, { "key": "period", "value": "monthly" }] }
+          }
+        },
+        {
+          "name": "Analytics — Top Products",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/analytics/top-products?limit=10", "host": ["{{baseUrl}}"], "path": ["api","v1","analytics","top-products"], "query": [{ "key": "limit", "value": "10" }] }
+          }
+        },
+        {
+          "name": "Analytics — Top Customers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/analytics/top-customers?limit=10", "host": ["{{baseUrl}}"], "path": ["api","v1","analytics","top-customers"], "query": [{ "key": "limit", "value": "10" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👥 Customers",
+      "item": [
+        {
+          "name": "List Customers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/customers?page=1&limit=20&search=", "host": ["{{baseUrl}}"], "path": ["api","v1","customers"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "search", "value": "" }] }
+          }
+        },
+        {
+          "name": "Create Customer",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) {",
+            "  pm.collectionVariables.set('customerId', pm.response.json().data.id);",
+            "  console.log('✅ customerId saved');",
+            "}"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/customers", "host": ["{{baseUrl}}"], "path": ["api","v1","customers"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Ramesh Kumar\",\n  \"code\": \"CUST001\",\n  \"email\": \"ramesh@example.com\",\n  \"phone\": \"9123456789\",\n  \"gstin\": \"27AABCU9603R1ZX\",\n  \"billingAddress\": {\n    \"line1\": \"12 Gandhi Nagar\",\n    \"city\": \"Mumbai\",\n    \"state\": \"Maharashtra\",\n    \"pincode\": \"400001\"\n  },\n  \"creditLimit\": 100000,\n  \"creditDays\": 30,\n  \"openingBalance\": 0\n}" }
+          }
+        },
+        {
+          "name": "Get Customer",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/customers/{{customerId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","customers","{{customerId}}"] }
+          }
+        },
+        {
+          "name": "Update Customer",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/customers/{{customerId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","customers","{{customerId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"creditLimit\": 200000,\n  \"creditDays\": 45\n}" }
+          }
+        },
+        {
+          "name": "Delete Customer",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/customers/{{customerId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","customers","{{customerId}}"] }
+          }
+        },
+        {
+          "name": "Customer Ledger",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/customers/{{customerId}}/ledger?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","customers","{{customerId}}","ledger"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Customer Statement",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/customers/{{customerId}}/statement", "host": ["{{baseUrl}}"], "path": ["api","v1","customers","{{customerId}}","statement"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏭 Suppliers",
+      "item": [
+        {
+          "name": "List Suppliers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/suppliers?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","suppliers"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Supplier",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) {",
+            "  pm.collectionVariables.set('supplierId', pm.response.json().data.id);",
+            "}"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/suppliers", "host": ["{{baseUrl}}"], "path": ["api","v1","suppliers"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Sharma Traders\",\n  \"code\": \"SUP001\",\n  \"email\": \"sharma@traders.com\",\n  \"phone\": \"9988776655\",\n  \"gstin\": \"07AABCS1429B1Z1\",\n  \"billingAddress\": {\n    \"line1\": \"45 Chandni Chowk\",\n    \"city\": \"Delhi\",\n    \"state\": \"Delhi\",\n    \"pincode\": \"110006\"\n  },\n  \"creditDays\": 30,\n  \"openingBalance\": 0\n}" }
+          }
+        },
+        {
+          "name": "Get Supplier",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/suppliers/{{supplierId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","suppliers","{{supplierId}}"] }
+          }
+        },
+        {
+          "name": "Update Supplier",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/suppliers/{{supplierId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","suppliers","{{supplierId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"creditDays\": 45\n}" }
+          }
+        },
+        {
+          "name": "Delete Supplier",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/suppliers/{{supplierId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","suppliers","{{supplierId}}"] }
+          }
+        },
+        {
+          "name": "Supplier Ledger",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/suppliers/{{supplierId}}/ledger", "host": ["{{baseUrl}}"], "path": ["api","v1","suppliers","{{supplierId}}","ledger"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📦 Products & Inventory",
+      "item": [
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products?page=1&limit=20&search=&type=PRODUCT&lowStock=false", "host": ["{{baseUrl}}"], "path": ["api","v1","products"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "search", "value": "" }, { "key": "type", "value": "PRODUCT" }, { "key": "lowStock", "value": "false" }] }
+          }
+        },
+        {
+          "name": "Create Product",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) {",
+            "  pm.collectionVariables.set('productId', pm.response.json().data.id);",
+            "  console.log('✅ productId saved');",
+            "}"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/products", "host": ["{{baseUrl}}"], "path": ["api","v1","products"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Premium Basmati Rice 5kg\",\n  \"sku\": \"RICE-BASMATI-5KG\",\n  \"barcode\": \"8901234567890\",\n  \"hsnCode\": \"1006\",\n  \"type\": \"PRODUCT\",\n  \"sellingPrice\": 450,\n  \"purchasePrice\": 320,\n  \"mrp\": 500,\n  \"taxRate\": 5,\n  \"openingStock\": 100,\n  \"reorderLevel\": 20,\n  \"trackInventory\": true,\n  \"warehouseId\": \"{{warehouseId}}\",\n  \"valuationMethod\": \"FIFO\"\n}" }
+          }
+        },
+        {
+          "name": "Get Product",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/{{productId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","products","{{productId}}"] }
+          }
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/products/{{productId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","products","{{productId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"sellingPrice\": 480,\n  \"reorderLevel\": 25\n}" }
+          }
+        },
+        {
+          "name": "Delete Product",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/{{productId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","products","{{productId}}"] }
+          }
+        },
+        {
+          "name": "Product Stock History",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/{{productId}}/stock-history?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","products","{{productId}}","stock-history"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Low Stock Products",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/low-stock", "host": ["{{baseUrl}}"], "path": ["api","v1","products","low-stock"] }
+          }
+        },
+        {
+          "name": "List Product Categories",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/categories", "host": ["{{baseUrl}}"], "path": ["api","v1","products","categories"] }
+          }
+        },
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/products/categories", "host": ["{{baseUrl}}"], "path": ["api","v1","products","categories"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Groceries\",\n  \"description\": \"Food and grocery items\"\n}" }
+          }
+        },
+        {
+          "name": "List Brands",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/brands", "host": ["{{baseUrl}}"], "path": ["api","v1","products","brands"] }
+          }
+        },
+        {
+          "name": "List Units of Measurement",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/products/units", "host": ["{{baseUrl}}"], "path": ["api","v1","products","units"] }
+          }
+        },
+        {
+          "name": "Stock Adjustment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/inventory/adjust", "host": ["{{baseUrl}}"], "path": ["api","v1","inventory","adjust"] },
+            "body": { "mode": "raw", "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"warehouseId\": \"{{warehouseId}}\",\n  \"quantity\": -5,\n  \"movementType\": \"ADJUSTMENT_OUT\",\n  \"notes\": \"Damaged goods write-off\"\n}" }
+          }
+        },
+        {
+          "name": "List Stock Movements",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/inventory/movements?productId={{productId}}&page=1", "host": ["{{baseUrl}}"], "path": ["api","v1","inventory","movements"], "query": [{ "key": "productId", "value": "{{productId}}" }, { "key": "page", "value": "1" }] }
+          }
+        },
+        {
+          "name": "Create Stock Transfer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/inventory/transfers", "host": ["{{baseUrl}}"], "path": ["api","v1","inventory","transfers"] },
+            "body": { "mode": "raw", "raw": "{\n  \"fromWarehouseId\": \"{{warehouseId}}\",\n  \"toWarehouseId\": \"DEST_WAREHOUSE_ID\",\n  \"items\": [\n    { \"productId\": \"{{productId}}\", \"quantity\": 10, \"notes\": \"Transfer for Mumbai branch\" }\n  ],\n  \"notes\": \"Inter-warehouse transfer\"\n}" }
+          }
+        },
+        {
+          "name": "List Transfers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/inventory/transfers?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","inventory","transfers"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🧾 Invoices (Sales Billing)",
+      "item": [
+        {
+          "name": "List Invoices",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices?page=1&limit=20&status=&fromDate=&toDate=", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "status", "value": "" }, { "key": "fromDate", "value": "" }, { "key": "toDate", "value": "" }] }
+          }
+        },
+        {
+          "name": "Create Invoice",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) {",
+            "  pm.collectionVariables.set('invoiceId', pm.response.json().data.id);",
+            "  console.log('✅ invoiceId saved');",
+            "}"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices"] },
+            "body": { "mode": "raw", "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"invoiceDate\": \"2026-06-01\",\n  \"dueDate\": \"2026-07-01\",\n  \"items\": [\n    {\n      \"productId\": \"{{productId}}\",\n      \"description\": \"Premium Basmati Rice 5kg\",\n      \"quantity\": 10,\n      \"unitPrice\": 450,\n      \"taxRate\": 5,\n      \"discountAmount\": 0,\n      \"hsnCode\": \"1006\"\n    }\n  ],\n  \"discountType\": \"PERCENTAGE\",\n  \"discountValue\": 0,\n  \"shippingCharges\": 100,\n  \"notes\": \"Thank you for your business\",\n  \"termsAndConditions\": \"Payment due within 30 days\",\n  \"isIGST\": false,\n  \"amountPaid\": 0\n}" }
+          }
+        },
+        {
+          "name": "Get Invoice",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}"] }
+          }
+        },
+        {
+          "name": "Update Invoice",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"notes\": \"Updated note\",\n  \"dueDate\": \"2026-07-15\"\n}" }
+          }
+        },
+        {
+          "name": "Download Invoice PDF",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}/pdf", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}","pdf"] }
+          }
+        },
+        {
+          "name": "Send Invoice by Email",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}/send-email", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}","send-email"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"customer@example.com\",\n  \"message\": \"Please find your invoice attached.\"\n}" }
+          }
+        },
+        {
+          "name": "Record Payment on Invoice",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}/payment", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}","payment"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 2350,\n  \"paymentMode\": \"UPI\",\n  \"paymentDate\": \"2026-06-05\",\n  \"referenceNumber\": \"UPI12345\",\n  \"notes\": \"Received via Google Pay\"\n}" }
+          }
+        },
+        {
+          "name": "Cancel Invoice",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}/cancel", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}","cancel"] },
+            "body": { "mode": "raw", "raw": "{\n  \"reason\": \"Customer cancelled the order\"\n}" }
+          }
+        },
+        {
+          "name": "Delete Invoice",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","invoices","{{invoiceId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📋 Quotations",
+      "item": [
+        {
+          "name": "List Quotations",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/quotations?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","quotations"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Quotation",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('quotationId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/quotations", "host": ["{{baseUrl}}"], "path": ["api","v1","quotations"] },
+            "body": { "mode": "raw", "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"validUntil\": \"2026-07-01\",\n  \"items\": [\n    {\n      \"productId\": \"{{productId}}\",\n      \"description\": \"Premium Basmati Rice 5kg\",\n      \"quantity\": 20,\n      \"unitPrice\": 450,\n      \"taxRate\": 5,\n      \"discount\": 5\n    }\n  ],\n  \"notes\": \"Quote valid for 30 days\",\n  \"terms\": \"50% advance required\"\n}" }
+          }
+        },
+        {
+          "name": "Get Quotation",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/quotations/{{quotationId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","quotations","{{quotationId}}"] }
+          }
+        },
+        {
+          "name": "Send Quotation to Customer",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/quotations/{{quotationId}}/send", "host": ["{{baseUrl}}"], "path": ["api","v1","quotations","{{quotationId}}","send"] }
+          }
+        },
+        {
+          "name": "Convert Quotation to Invoice",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/quotations/{{quotationId}}/convert-to-invoice", "host": ["{{baseUrl}}"], "path": ["api","v1","quotations","{{quotationId}}","convert-to-invoice"] }
+          }
+        },
+        {
+          "name": "Delete Quotation",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/quotations/{{quotationId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","quotations","{{quotationId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📦 Sales Orders",
+      "item": [
+        {
+          "name": "List Sales Orders",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/sales-orders?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","sales-orders"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Sales Order",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('salesOrderId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/sales-orders", "host": ["{{baseUrl}}"], "path": ["api","v1","sales-orders"] },
+            "body": { "mode": "raw", "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"deliveryDate\": \"2026-06-15\",\n  \"items\": [\n    {\n      \"productId\": \"{{productId}}\",\n      \"description\": \"Premium Basmati Rice 5kg\",\n      \"quantity\": 50,\n      \"unitPrice\": 450,\n      \"taxRate\": 5,\n      \"discount\": 0\n    }\n  ],\n  \"terms\": \"Delivery within 14 days\"\n}" }
+          }
+        },
+        {
+          "name": "Get Sales Order",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/sales-orders/{{salesOrderId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","sales-orders","{{salesOrderId}}"] }
+          }
+        },
+        {
+          "name": "Convert Sales Order to Invoice",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/sales-orders/{{salesOrderId}}/convert-to-invoice", "host": ["{{baseUrl}}"], "path": ["api","v1","sales-orders","{{salesOrderId}}","convert-to-invoice"] }
+          }
+        },
+        {
+          "name": "Cancel Sales Order",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/sales-orders/{{salesOrderId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","sales-orders","{{salesOrderId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🛒 Purchases",
+      "item": [
+        {
+          "name": "List Purchases",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/purchases?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","purchases"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Purchase Bill",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('purchaseId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/purchases", "host": ["{{baseUrl}}"], "path": ["api","v1","purchases"] },
+            "body": { "mode": "raw", "raw": "{\n  \"supplierId\": \"{{supplierId}}\",\n  \"purchaseDate\": \"2026-06-01\",\n  \"dueDate\": \"2026-07-01\",\n  \"billNumber\": \"BILL-2026-001\",\n  \"items\": [\n    {\n      \"productId\": \"{{productId}}\",\n      \"description\": \"Premium Basmati Rice 5kg\",\n      \"quantity\": 200,\n      \"unitPrice\": 320,\n      \"taxRate\": 5,\n      \"discountValue\": 0,\n      \"discountType\": \"FLAT\",\n      \"warehouseId\": \"{{warehouseId}}\"\n    }\n  ],\n  \"discountType\": \"FLAT\",\n  \"discountValue\": 0,\n  \"shippingCharges\": 500,\n  \"roundOff\": 0,\n  \"amountPaid\": 0,\n  \"notes\": \"Stock replenishment\",\n  \"reverseCharge\": false\n}" }
+          }
+        },
+        {
+          "name": "Get Purchase",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","purchases","{{purchaseId}}"] }
+          }
+        },
+        {
+          "name": "Update Purchase",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","purchases","{{purchaseId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"notes\": \"Updated notes\"\n}" }
+          }
+        },
+        {
+          "name": "Record Payment on Purchase",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}/payment", "host": ["{{baseUrl}}"], "path": ["api","v1","purchases","{{purchaseId}}","payment"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 64500,\n  \"paymentMode\": \"BANK_TRANSFER\",\n  \"paymentDate\": \"2026-06-10\",\n  \"referenceNumber\": \"NEFT202606\"\n}" }
+          }
+        },
+        {
+          "name": "Delete Purchase",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","purchases","{{purchaseId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💰 Payments",
+      "item": [
+        {
+          "name": "List Payments",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/payments?page=1&limit=20&type=RECEIPT", "host": ["{{baseUrl}}"], "path": ["api","v1","payments"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "type", "value": "RECEIPT" }] }
+          }
+        },
+        {
+          "name": "Record Payment (Receipt)",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('paymentId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/payments", "host": ["{{baseUrl}}"], "path": ["api","v1","payments"] },
+            "body": { "mode": "raw", "raw": "{\n  \"type\": \"RECEIPT\",\n  \"customerId\": \"{{customerId}}\",\n  \"amount\": 5000,\n  \"paymentMode\": \"UPI\",\n  \"paymentDate\": \"2026-06-05\",\n  \"referenceNumber\": \"GPay12345\",\n  \"allocations\": [\n    { \"invoiceId\": \"{{invoiceId}}\", \"amount\": 5000 }\n  ],\n  \"notes\": \"Received via Google Pay\"\n}" }
+          }
+        },
+        {
+          "name": "Record Payment (Advance / Unallocated)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/payments", "host": ["{{baseUrl}}"], "path": ["api","v1","payments"] },
+            "body": { "mode": "raw", "raw": "{\n  \"type\": \"RECEIPT\",\n  \"customerId\": \"{{customerId}}\",\n  \"amount\": 10000,\n  \"paymentMode\": \"CASH\",\n  \"paymentDate\": \"2026-06-05\",\n  \"notes\": \"Advance payment\"\n}" }
+          }
+        },
+        {
+          "name": "Get Payment",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/payments/{{paymentId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","payments","{{paymentId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📒 Accounting",
+      "item": [
+        {
+          "name": "Chart of Accounts",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/accounts", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","accounts"] }
+          }
+        },
+        {
+          "name": "Create Account",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/accounts", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","accounts"] },
+            "body": { "mode": "raw", "raw": "{\n  \"code\": \"1010\",\n  \"name\": \"Petty Cash\",\n  \"type\": \"ASSET\",\n  \"subType\": \"CURRENT_ASSET\",\n  \"openingBalance\": 5000,\n  \"description\": \"Petty cash account\"\n}" }
+          }
+        },
+        {
+          "name": "Get Account Transactions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/accounts/:id/transactions?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","accounts",":id","transactions"], "variable": [{ "key": "id", "value": "ACCOUNT_ID" }], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Create Journal Entry",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/journal", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","journal"] },
+            "body": { "mode": "raw", "raw": "{\n  \"date\": \"2026-06-01\",\n  \"description\": \"Office supplies purchase\",\n  \"type\": \"GENERAL\",\n  \"referenceNumber\": \"JE-2026-001\",\n  \"lines\": [\n    { \"accountId\": \"EXPENSE_ACCOUNT_ID\", \"type\": \"DEBIT\", \"amount\": 1500, \"description\": \"Office supplies\" },\n    { \"accountId\": \"CASH_ACCOUNT_ID\", \"type\": \"CREDIT\", \"amount\": 1500, \"description\": \"Cash payment\" }\n  ]\n}" }
+          }
+        },
+        {
+          "name": "List Journal Entries",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/journal?page=1&limit=20&fromDate=2026-04-01", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","journal"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "fromDate", "value": "2026-04-01" }] }
+          }
+        },
+        {
+          "name": "Trial Balance",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/trial-balance?asOfDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","trial-balance"], "query": [{ "key": "asOfDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Profit & Loss Statement",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/profit-loss?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","profit-loss"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Balance Sheet",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/balance-sheet?asOfDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","balance-sheet"], "query": [{ "key": "asOfDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Cash Flow Statement",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/cash-flow?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","cash-flow"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "General Ledger",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/accounting/general-ledger?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","accounting","general-ledger"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏦 Banking",
+      "item": [
+        {
+          "name": "List Bank Accounts",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/accounts", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","accounts"] }
+          }
+        },
+        {
+          "name": "Create Bank Account",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('bankAccountId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/accounts", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","accounts"] },
+            "body": { "mode": "raw", "raw": "{\n  \"accountName\": \"HDFC Current Account\",\n  \"accountNumber\": \"12345678901234\",\n  \"bankName\": \"HDFC Bank\",\n  \"ifscCode\": \"HDFC0001234\",\n  \"branchName\": \"Andheri East\",\n  \"openingBalance\": 50000,\n  \"isDefault\": true\n}" }
+          }
+        },
+        {
+          "name": "Get Bank Account Details",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/accounts/{{bankAccountId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","accounts","{{bankAccountId}}"] }
+          }
+        },
+        {
+          "name": "List Transactions for Account",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/accounts/{{bankAccountId}}/transactions?page=1&fromDate=2026-04-01", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","accounts","{{bankAccountId}}","transactions"], "query": [{ "key": "page", "value": "1" }, { "key": "fromDate", "value": "2026-04-01" }] }
+          }
+        },
+        {
+          "name": "Add Manual Transaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/transactions", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","transactions"] },
+            "body": { "mode": "raw", "raw": "{\n  \"bankAccountId\": \"{{bankAccountId}}\",\n  \"type\": \"CREDIT\",\n  \"amount\": 25000,\n  \"transactionDate\": \"2026-06-01\",\n  \"description\": \"Customer payment received\",\n  \"referenceNumber\": \"NEFT20260601\"\n}" }
+          }
+        },
+        {
+          "name": "Get Unreconciled Transactions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/accounts/{{bankAccountId}}/reconcile", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","accounts","{{bankAccountId}}","reconcile"] }
+          }
+        },
+        {
+          "name": "Reconcile Transactions",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/banking/accounts/{{bankAccountId}}/reconcile", "host": ["{{baseUrl}}"], "path": ["api","v1","banking","accounts","{{bankAccountId}}","reconcile"] },
+            "body": { "mode": "raw", "raw": "{\n  \"transactionIds\": [\"TXN_ID_1\", \"TXN_ID_2\"],\n  \"statementDate\": \"2026-05-31\",\n  \"statementBalance\": 75000\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🧾 GST",
+      "item": [
+        {
+          "name": "Validate GSTIN",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/validate-gstin", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","validate-gstin"] },
+            "body": { "mode": "raw", "raw": "{\n  \"gstin\": \"27AABCU9603R1ZX\"\n}" }
+          }
+        },
+        {
+          "name": "GSTR-1 Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/reports/gstr1?month=5&year=2026", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","reports","gstr1"], "query": [{ "key": "month", "value": "5" }, { "key": "year", "value": "2026" }] }
+          }
+        },
+        {
+          "name": "GSTR-2 Report (Purchase Register)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/reports/gstr2?month=5&year=2026", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","reports","gstr2"], "query": [{ "key": "month", "value": "5" }, { "key": "year", "value": "2026" }] }
+          }
+        },
+        {
+          "name": "GSTR-3B Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/reports/gstr3b?month=5&year=2026", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","reports","gstr3b"], "query": [{ "key": "month", "value": "5" }, { "key": "year", "value": "2026" }] }
+          }
+        },
+        {
+          "name": "GST Summary",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/reports/gst-summary?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","reports","gst-summary"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "List HSN Codes",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/hsn?search=rice", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","hsn"], "query": [{ "key": "search", "value": "rice" }] }
+          }
+        },
+        {
+          "name": "Create HSN Code",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/hsn", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","hsn"] },
+            "body": { "mode": "raw", "raw": "{\n  \"code\": \"1006\",\n  \"description\": \"Rice\",\n  \"taxRate\": 5\n}" }
+          }
+        },
+        {
+          "name": "List Tax Rates",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/tax-rates", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","tax-rates"] }
+          }
+        },
+        {
+          "name": "Create Tax Rate",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/gst/tax-rates", "host": ["{{baseUrl}}"], "path": ["api","v1","gst","tax-rates"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"GST 18%\",\n  \"rate\": 18\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💸 Expenses",
+      "item": [
+        {
+          "name": "List Expenses",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses?page=1&limit=20&fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Create Expense",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses"] },
+            "body": { "mode": "raw", "raw": "{\n  \"description\": \"Office Rent June 2026\",\n  \"amount\": 25000,\n  \"date\": \"2026-06-01\",\n  \"paymentMode\": \"BANK_TRANSFER\",\n  \"bankAccountId\": \"{{bankAccountId}}\",\n  \"taxable\": false,\n  \"gstRate\": 0,\n  \"isRecurring\": true,\n  \"notes\": \"Monthly office rent\"\n}" }
+          }
+        },
+        {
+          "name": "Get Expense",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses/:id", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses",":id"], "variable": [{ "key": "id", "value": "EXPENSE_ID" }] }
+          }
+        },
+        {
+          "name": "Update Expense",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses/:id", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses",":id"], "variable": [{ "key": "id", "value": "EXPENSE_ID" }] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 26000,\n  \"notes\": \"Rent increased\"\n}" }
+          }
+        },
+        {
+          "name": "Delete Expense",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses/:id", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses",":id"], "variable": [{ "key": "id", "value": "EXPENSE_ID" }] }
+          }
+        },
+        {
+          "name": "List Expense Categories",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses/categories/list", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses","categories","list"] }
+          }
+        },
+        {
+          "name": "Create Expense Category",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/expenses/categories", "host": ["{{baseUrl}}"], "path": ["api","v1","expenses","categories"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Rent\",\n  \"description\": \"Office and warehouse rent\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🤝 CRM",
+      "item": [
+        {
+          "name": "List Leads",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/leads?page=1&limit=20&status=NEW", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","leads"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "status", "value": "NEW" }] }
+          }
+        },
+        {
+          "name": "Create Lead",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('leadId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/leads", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","leads"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Priya Sharma\",\n  \"email\": \"priya@business.com\",\n  \"phone\": \"9876543210\",\n  \"company\": \"Sharma Retail Pvt Ltd\",\n  \"source\": \"WEBSITE\",\n  \"status\": \"NEW\",\n  \"priority\": \"HIGH\",\n  \"expectedValue\": 500000,\n  \"expectedCloseDate\": \"2026-08-01\",\n  \"notes\": \"Interested in bulk purchase\"\n}" }
+          }
+        },
+        {
+          "name": "Get Lead",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","leads","{{leadId}}"] }
+          }
+        },
+        {
+          "name": "Update Lead Status",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","leads","{{leadId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"QUALIFIED\",\n  \"notes\": \"Qualified after demo call\"\n}" }
+          }
+        },
+        {
+          "name": "Add Lead Activity / Note",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/leads/{{leadId}}/notes", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","leads","{{leadId}}","notes"] },
+            "body": { "mode": "raw", "raw": "{\n  \"activityType\": \"CALL\",\n  \"description\": \"Had a demo call, customer is interested in 500 units/month\",\n  \"outcome\": \"Send proposal\",\n  \"nextFollowUpDate\": \"2026-06-10\"\n}" }
+          }
+        },
+        {
+          "name": "Pipeline Summary",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/pipeline", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","pipeline"] }
+          }
+        },
+        {
+          "name": "List Tasks",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/tasks?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","tasks"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Task",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/crm/tasks", "host": ["{{baseUrl}}"], "path": ["api","v1","crm","tasks"] },
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Send proposal to Priya Sharma\",\n  \"description\": \"Include pricing for 500 units/month\",\n  \"dueDate\": \"2026-06-08\",\n  \"priority\": \"HIGH\",\n  \"status\": \"TODO\",\n  \"leadId\": \"{{leadId}}\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏗️ Manufacturing",
+      "item": [
+        {
+          "name": "List Bills of Material",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/manufacturing/bom", "host": ["{{baseUrl}}"], "path": ["api","v1","manufacturing","bom"] }
+          }
+        },
+        {
+          "name": "Create Bill of Material",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('bomId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/manufacturing/bom", "host": ["{{baseUrl}}"], "path": ["api","v1","manufacturing","bom"] },
+            "body": { "mode": "raw", "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"name\": \"Rice Pack BOM v1\",\n  \"quantity\": 100,\n  \"materials\": [\n    { \"productId\": \"RAW_MATERIAL_PRODUCT_ID\", \"quantity\": 110, \"notes\": \"10% scrap allowance\" }\n  ]\n}" }
+          }
+        },
+        {
+          "name": "List Production Orders",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/manufacturing/orders?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","manufacturing","orders"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Production Order",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('productionOrderId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/manufacturing/orders", "host": ["{{baseUrl}}"], "path": ["api","v1","manufacturing","orders"] },
+            "body": { "mode": "raw", "raw": "{\n  \"bomId\": \"{{bomId}}\",\n  \"quantity\": 500,\n  \"scheduledDate\": \"2026-06-10\",\n  \"warehouseId\": \"{{warehouseId}}\",\n  \"notes\": \"June production run\"\n}" }
+          }
+        },
+        {
+          "name": "Start Production Order",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/manufacturing/orders/{{productionOrderId}}/start", "host": ["{{baseUrl}}"], "path": ["api","v1","manufacturing","orders","{{productionOrderId}}","start"] }
+          }
+        },
+        {
+          "name": "Complete Production Order",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/manufacturing/orders/{{productionOrderId}}/complete", "host": ["{{baseUrl}}"], "path": ["api","v1","manufacturing","orders","{{productionOrderId}}","complete"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏬 Warehouses",
+      "item": [
+        {
+          "name": "List Warehouses",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/warehouses", "host": ["{{baseUrl}}"], "path": ["api","v1","warehouses"] }
+          }
+        },
+        {
+          "name": "Create Warehouse",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('warehouseId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/warehouses", "host": ["{{baseUrl}}"], "path": ["api","v1","warehouses"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Main Warehouse\",\n  \"code\": \"WH-MAIN\",\n  \"address\": {\n    \"line1\": \"Plot 5, MIDC\",\n    \"city\": \"Mumbai\",\n    \"state\": \"Maharashtra\",\n    \"pincode\": \"400093\"\n  },\n  \"contactPerson\": \"Ravi Patil\",\n  \"phone\": \"9090909090\",\n  \"isDefault\": true\n}" }
+          }
+        },
+        {
+          "name": "Get Warehouse",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/warehouses/{{warehouseId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","warehouses","{{warehouseId}}"] }
+          }
+        },
+        {
+          "name": "Update Warehouse",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/warehouses/{{warehouseId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","warehouses","{{warehouseId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"contactPerson\": \"Suresh Patil\"\n}" }
+          }
+        },
+        {
+          "name": "Warehouse Stock View",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/warehouses/{{warehouseId}}/stock", "host": ["{{baseUrl}}"], "path": ["api","v1","warehouses","{{warehouseId}}","stock"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👷 Employees & Payroll",
+      "item": [
+        {
+          "name": "List Employees",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/employees?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","employees"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Create Employee",
+          "event": [{ "listen": "test", "script": { "exec": [
+            "if (pm.response.code === 201) { pm.collectionVariables.set('employeeId', pm.response.json().data.id); }"
+          ], "type": "text/javascript" } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/employees", "host": ["{{baseUrl}}"], "path": ["api","v1","employees"] },
+            "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Suresh\",\n  \"lastName\": \"Patil\",\n  \"employeeCode\": \"EMP001\",\n  \"email\": \"suresh@adilenterprises.com\",\n  \"phone\": \"9876501234\",\n  \"designation\": \"Warehouse Manager\",\n  \"department\": \"Operations\",\n  \"joiningDate\": \"2026-01-01\",\n  \"salary\": 35000,\n  \"salaryType\": \"MONTHLY\"\n}" }
+          }
+        },
+        {
+          "name": "Get Employee",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/employees/{{employeeId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","employees","{{employeeId}}"] }
+          }
+        },
+        {
+          "name": "Update Employee",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/employees/{{employeeId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","employees","{{employeeId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"salary\": 40000,\n  \"designation\": \"Senior Warehouse Manager\"\n}" }
+          }
+        },
+        {
+          "name": "Get Employee Attendance",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/employees/{{employeeId}}/attendance?month=6&year=2026", "host": ["{{baseUrl}}"], "path": ["api","v1","employees","{{employeeId}}","attendance"], "query": [{ "key": "month", "value": "6" }, { "key": "year", "value": "2026" }] }
+          }
+        },
+        {
+          "name": "Mark Attendance",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/employees/attendance", "host": ["{{baseUrl}}"], "path": ["api","v1","employees","attendance"] },
+            "body": { "mode": "raw", "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"date\": \"2026-06-01\",\n  \"status\": \"PRESENT\",\n  \"checkIn\": \"2026-06-01T09:00:00.000Z\",\n  \"checkOut\": \"2026-06-01T18:00:00.000Z\"\n}" }
+          }
+        },
+        {
+          "name": "List Salary Records",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/employees/{{employeeId}}/salary?year=2026", "host": ["{{baseUrl}}"], "path": ["api","v1","employees","{{employeeId}}","salary"], "query": [{ "key": "year", "value": "2026" }] }
+          }
+        },
+        {
+          "name": "Generate Salary Record",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/employees/{{employeeId}}/salary", "host": ["{{baseUrl}}"], "path": ["api","v1","employees","{{employeeId}}","salary"] },
+            "body": { "mode": "raw", "raw": "{\n  \"month\": 6,\n  \"year\": 2026,\n  \"basicSalary\": 40000,\n  \"allowances\": 5000,\n  \"deductions\": 3000\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📄 Documents",
+      "item": [
+        {
+          "name": "List Documents",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/documents?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","documents"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Upload Document",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/documents/upload", "host": ["{{baseUrl}}"], "path": ["api","v1","documents","upload"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "/path/to/your/file.pdf" },
+                { "key": "type", "value": "ATTACHMENT", "type": "text" },
+                { "key": "name", "value": "June Purchase Bill", "type": "text" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Download Document",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/documents/:id/download", "host": ["{{baseUrl}}"], "path": ["api","v1","documents",":id","download"], "variable": [{ "key": "id", "value": "DOCUMENT_ID" }] }
+          }
+        },
+        {
+          "name": "Delete Document",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/api/v1/documents/:id", "host": ["{{baseUrl}}"], "path": ["api","v1","documents",":id"], "variable": [{ "key": "id", "value": "DOCUMENT_ID" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔔 Notifications",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/notifications?page=1&limit=20&unreadOnly=true", "host": ["{{baseUrl}}"], "path": ["api","v1","notifications"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }, { "key": "unreadOnly", "value": "true" }] }
+          }
+        },
+        {
+          "name": "Mark Notification as Read",
+          "request": {
+            "method": "PUT",
+            "url": { "raw": "{{baseUrl}}/api/v1/notifications/:id/read", "host": ["{{baseUrl}}"], "path": ["api","v1","notifications",":id","read"], "variable": [{ "key": "id", "value": "NOTIFICATION_ID" }] }
+          }
+        },
+        {
+          "name": "Mark All Notifications as Read",
+          "request": {
+            "method": "PUT",
+            "url": { "raw": "{{baseUrl}}/api/v1/notifications/read-all", "host": ["{{baseUrl}}"], "path": ["api","v1","notifications","read-all"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📈 Reports",
+      "item": [
+        {
+          "name": "Sales Summary Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/sales/summary?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","sales","summary"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Purchase Summary Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/purchases/summary?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","purchases","summary"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Outstanding Receivables",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/outstanding/receivables", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","outstanding","receivables"] }
+          }
+        },
+        {
+          "name": "Outstanding Payables",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/outstanding/payables", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","outstanding","payables"] }
+          }
+        },
+        {
+          "name": "Expense Summary Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/expenses/summary?fromDate=2026-04-01&toDate=2026-06-30", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","expenses","summary"], "query": [{ "key": "fromDate", "value": "2026-04-01" }, { "key": "toDate", "value": "2026-06-30" }] }
+          }
+        },
+        {
+          "name": "Inventory Aging Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/inventory/aging", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","inventory","aging"] }
+          }
+        },
+        {
+          "name": "Fast-Moving Products Report",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/reports/inventory/fast-moving?days=30", "host": ["{{baseUrl}}"], "path": ["api","v1","reports","inventory","fast-moving"], "query": [{ "key": "days", "value": "30" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💳 Subscriptions",
+      "item": [
+        {
+          "name": "Get Current Subscription",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/subscriptions/current", "host": ["{{baseUrl}}"], "path": ["api","v1","subscriptions","current"] }
+          }
+        },
+        {
+          "name": "List Available Plans",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/v1/subscriptions/plans", "host": ["{{baseUrl}}"], "path": ["api","v1","subscriptions","plans"] }
+          }
+        },
+        {
+          "name": "Upgrade Plan",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/subscriptions/upgrade", "host": ["{{baseUrl}}"], "path": ["api","v1","subscriptions","upgrade"] },
+            "body": { "mode": "raw", "raw": "{\n  \"planId\": \"PROFESSIONAL\"\n}" }
+          }
+        },
+        {
+          "name": "Cancel Subscription",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/api/v1/subscriptions/cancel", "host": ["{{baseUrl}}"], "path": ["api","v1","subscriptions","cancel"] }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.npm
+.pnp
+.pnp.js
+
+# Build outputs
+.next/
+dist/
+build/
+out/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Prisma
+apps/api/prisma/migrations/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+.DS_Store
+
+# Turbo
+.turbo/
+
+# Temp files
+*.tmp
+*.temp
+
+# Docker
+docker/postgres/data/
+
+# Test
+test-results/
+playwright-report/
