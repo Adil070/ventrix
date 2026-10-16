@@ -1,20 +1,38 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../infrastructure/database';
 import { cache, CacheService } from '../../infrastructure/cache';
-import { NotFoundError, BadRequestError, ConflictError } from '../../shared/errors';
-import { generateSequenceNumber, roundTo, toDecimal } from '../../shared/helpers/response.helper';
+import { NotFoundError, BadRequestError } from '../../shared/errors';
+import { roundTo, toDecimal } from '../../shared/helpers/response.helper';
+import { nextSequenceNumber, retryOnUniqueViolation } from '../../shared/helpers/sequence';
 import type { CreateInvoiceInput, UpdateInvoiceInput, InvoiceQueryInput, RecordPaymentInput } from './invoice.dto';
 import { AccountingEngine } from '../accounting/accounting.engine';
-import { InventoryEngine } from '../inventory/inventory.engine';
+import { InventoryEngine, lockProducts, resolveWarehouse } from '../inventory/inventory.engine';
 
 export class InvoiceService {
   private readonly accountingEngine = new AccountingEngine();
   private readonly inventoryEngine = new InventoryEngine();
 
   // ─── Create Invoice ───────────────────────────────────────────────────────────
-  async createInvoice(organizationId: string, branchId: string | undefined, userId: string, input: CreateInvoiceInput) {
-    // Generate invoice number
-    const invoiceNumber = await this.getNextInvoiceNumber(organizationId);
+  /**
+   * Single code path for every invoice (POST /invoices, quotation and sales-order conversion): numbering,
+   * totals/GST, stock deduction, journal entry and dashboard cache. `options.onCreated` runs inside the same
+   * transaction, so callers can link/mark their source document atomically (throwing rolls everything back).
+   * Invoice creation is serialised per org by the numbering lock, so `beforeCreate` sees committed state of
+   * any concurrent conversion of the same source document.
+   */
+  async createInvoice(
+    organizationId: string,
+    branchId: string | undefined,
+    userId: string,
+    input: CreateInvoiceInput,
+    options: {
+      /** Runs in the transaction after the per-org invoice-number lock is taken, before the invoice is written. */
+      beforeCreate?: (tx: Prisma.TransactionClient) => Promise<void>;
+      /** Runs in the transaction after the invoice (and its stock/journal postings) is written. */
+      onCreated?: (tx: Prisma.TransactionClient, invoice: { id: string; invoiceNumber: string }) => Promise<void>;
+    } = {},
+  ) {
+    await this.assertReferencesBelongToOrg(organizationId, input);
 
     // Calculate totals
     const calculated = this.calculateInvoiceTotals(input);
@@ -23,7 +41,12 @@ export class InvoiceService {
     const autoConfirm = (input as any).autoConfirm ?? false;
     const initialStatus = autoConfirm ? 'CONFIRMED' : 'DRAFT';
 
-    const invoice = await prisma.$transaction(async (tx) => {
+    // The number is allocated inside the transaction under a per-org lock; the retry only covers rows
+    // written by code paths that bypass the lock.
+    const invoice = await retryOnUniqueViolation('invoiceNumber', () => prisma.$transaction(async (tx) => {
+      const invoiceNumber = await this.getNextInvoiceNumber(tx, organizationId);
+      if (options.beforeCreate) await options.beforeCreate(tx);
+
       // Create invoice
       const created = await tx.invoice.create({
         data: {
@@ -110,44 +133,7 @@ export class InvoiceService {
         await this.accountingEngine.postSalesEntry(tx, created as any, organizationId);
 
         // Update inventory
-        const defaultWarehouse = await tx.warehouse.findFirst({
-          where: { organizationId, isActive: true },
-          orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }]
-        });
-
-        for (const item of created.items) {
-          if (item.productId) {
-            const warehouseId = item.warehouseId || defaultWarehouse?.id;
-            
-            if (warehouseId) {
-              const product = await tx.product.findUnique({ 
-                where: { id: item.productId },
-                select: { trackInventory: true, openingStock: true }
-              });
-
-              if (product?.trackInventory) {
-                const newStock = Number(product.openingStock) - toDecimal(item.quantity);
-                await tx.product.update({ 
-                  where: { id: item.productId }, 
-                  data: { openingStock: newStock } 
-                });
-              }
-
-              await this.inventoryEngine.recordStockMovement(tx, {
-                organizationId,
-                warehouseId,
-                productId: item.productId,
-                variantId: item.variantId || undefined,
-                movementType: 'SALE',
-                quantity: -toDecimal(item.quantity),
-                rate: toDecimal(item.unitPrice),
-                referenceType: 'INVOICE',
-                referenceId: created.id,
-                createdBy: userId,
-              });
-            }
-          }
-        }
+        await this.deductStockForInvoice(tx, organizationId, created.id, created.items, userId);
 
         // Update sales order if linked
         if (created.salesOrderId) {
@@ -155,8 +141,10 @@ export class InvoiceService {
         }
       }
 
+      if (options.onCreated) await options.onCreated(tx, created);
+
       return created;
-    });
+    }, { maxWait: 10000, timeout: 30000 }));
 
     // Invalidate dashboard cache
     await cache.del(CacheService.keys.dashboardStats(organizationId));
@@ -173,64 +161,26 @@ export class InvoiceService {
     }
 
     await prisma.$transaction(async (tx) => {
-      // Update status
-      await tx.invoice.update({
-        where: { id: invoiceId },
+      // Conditional update: a concurrent confirm/cancel makes this match 0 rows instead of posting twice.
+      const { count } = await tx.invoice.updateMany({
+        where: { id: invoiceId, organizationId, status: 'DRAFT' },
         data: { status: 'CONFIRMED' },
       });
+      if (count !== 1) throw new BadRequestError('Invoice is no longer in DRAFT status');
 
       // Post journal entries
       await this.accountingEngine.postSalesEntry(tx, invoice as any, organizationId);
 
       // Update inventory
-      // Get default warehouse if items don't have warehouseId
-      const defaultWarehouse = await tx.warehouse.findFirst({
-        where: { organizationId, isActive: true },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }]
-      });
-
-      for (const item of invoice.items) {
-        if (item.productId) {
-          const warehouseId = item.warehouseId || defaultWarehouse?.id;
-          
-          if (warehouseId) {
-            // Get product and update stock
-            const product = await tx.product.findUnique({ 
-              where: { id: item.productId },
-              select: { trackInventory: true, openingStock: true }
-            });
-
-            if (product?.trackInventory) {
-              // Decrease stock
-              const newStock = Number(product.openingStock) - toDecimal(item.quantity);
-              await tx.product.update({ 
-                where: { id: item.productId }, 
-                data: { openingStock: newStock } 
-              });
-            }
-
-            // Record stock entry
-            await this.inventoryEngine.recordStockMovement(tx, {
-              organizationId,
-              warehouseId,
-              productId: item.productId,
-              variantId: item.variantId || undefined,
-              movementType: 'SALE',
-              quantity: -toDecimal(item.quantity),
-              rate: toDecimal(item.unitPrice),
-              referenceType: 'INVOICE',
-              referenceId: invoiceId,
-              createdBy: userId,
-            });
-          }
-        }
-      }
+      await this.deductStockForInvoice(tx, organizationId, invoiceId, invoice.items, userId);
 
       // Update sales order if linked
       if (invoice.salesOrderId) {
         await this.updateSalesOrderFulfillment(tx, invoice.salesOrderId, invoice.items);
       }
-    });
+    }, { maxWait: 10000, timeout: 30000 });
+
+    await cache.del(CacheService.keys.dashboardStats(organizationId));
 
     return { message: 'Invoice confirmed successfully' };
   }
@@ -247,18 +197,37 @@ export class InvoiceService {
       throw new BadRequestError('Invoice is already fully paid');
     }
 
+    if (input.bankAccountId && !(await prisma.bankAccount.count({ where: { id: input.bankAccountId, organizationId } }))) {
+      throw new NotFoundError('Bank account', input.bankAccountId);
+    }
+
     const paymentAmount = Math.min(input.amount, toDecimal(invoice.balanceAmount));
     const newBalance = roundTo(toDecimal(invoice.balanceAmount) - paymentAmount);
     const newPaid = roundTo(toDecimal(invoice.paidAmount) + paymentAmount);
     const newStatus = newBalance <= 0 ? 'PAID' : 'PARTIALLY_PAID';
 
     const payment = await prisma.$transaction(async (tx) => {
+      // Re-check the balance we computed from: a concurrent payment/credit makes this match nothing.
+      const { count } = await tx.invoice.updateMany({
+        where: { id: invoiceId, organizationId, balanceAmount: invoice.balanceAmount, status: { not: 'CANCELLED' } },
+        data: {
+          paidAmount: newPaid,
+          balanceAmount: newBalance,
+          status: newStatus,
+        },
+      });
+      if (count !== 1) throw new BadRequestError('Invoice changed while recording the payment; reload and try again');
+
+      // Same per-org PAY-00001 sequence as the payments module (max-based under an advisory lock).
+      const paymentNumber = await nextSequenceNumber(tx, organizationId, 'payment', 'PAY-', 5);
+
       // Create payment
       const pay = await tx.payment.create({
         data: {
+          organizationId,
           invoiceId,
           customerId: invoice.customerId || undefined,
-          paymentNumber: `PAY-${Date.now()}`,
+          paymentNumber,
           type: 'RECEIPT',
           mode: input.mode as any,
           amount: paymentAmount,
@@ -273,21 +242,11 @@ export class InvoiceService {
         },
       });
 
-      // Update invoice
-      await tx.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          paidAmount: newPaid,
-          balanceAmount: newBalance,
-          status: newStatus,
-        },
-      });
-
       // Post payment journal entry
       await this.accountingEngine.postReceiptEntry(tx, pay as any, invoice as any, organizationId);
 
       return pay;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     await cache.del(CacheService.keys.dashboardStats(organizationId));
 
@@ -295,7 +254,15 @@ export class InvoiceService {
   }
 
   // ─── Cancel Invoice ───────────────────────────────────────────────────────────
-  async cancelInvoice(organizationId: string, invoiceId: string, reason: string) {
+  /**
+   * Policy: only invoices without money against them can be cancelled. If payments were recorded or a
+   * return was raised against the invoice, cancelling would leave receipts/credit notes pointing at a void
+   * document, so we refuse (400) and the user must issue a credit note / sales return instead.
+   * Cancelling a confirmed invoice puts its stock back (positive stock entries + product.openingStock) and
+   * posts a reversing journal entry. The DRAFT/CONFIRMED -> CANCELLED switch is a conditional update, so
+   * the reversal can never run twice.
+   */
+  async cancelInvoice(organizationId: string, invoiceId: string, reason: string, userId?: string) {
     const invoice = await this.getInvoiceOrThrow(invoiceId, organizationId);
 
     if (invoice.status === 'CANCELLED') {
@@ -306,14 +273,109 @@ export class InvoiceService {
       throw new BadRequestError('Cannot cancel a paid invoice. Create a credit note instead.');
     }
 
-    await prisma.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        status: 'CANCELLED',
-        cancelledAt: new Date(),
-        cancelReason: reason,
-      },
-    });
+    const [paymentCount, returnCount] = await Promise.all([
+      prisma.payment.count({ where: { invoiceId, status: { notIn: ['FAILED', 'REFUNDED'] } } }),
+      prisma.returnOrder.count({ where: { organizationId, invoiceId, status: { not: 'REJECTED' } } }),
+    ]);
+    if (paymentCount > 0 || toDecimal(invoice.paidAmount) > 0) {
+      throw new BadRequestError('Cannot cancel an invoice with recorded payments. Create a credit note (sales return) instead.');
+    }
+    if (returnCount > 0) {
+      throw new BadRequestError('Cannot cancel an invoice that has sales returns raised against it.');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const { count } = await tx.invoice.updateMany({
+        where: { id: invoiceId, organizationId, status: invoice.status },
+        data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: reason },
+      });
+      if (count !== 1) throw new BadRequestError('Invoice was modified by another request; reload and try again');
+
+      if (invoice.status === 'DRAFT') return; // nothing was posted for a draft
+
+      // Put back the stock this invoice took out: one reversing entry per SALE entry it wrote (so legacy
+      // entries of untracked products are netted too); openingStock only moves for tracked products, which
+      // are the ones whose openingStock was decremented.
+      const saleEntries = await tx.stockEntry.findMany({
+        where: { referenceType: 'INVOICE', referenceId: invoiceId, movementType: 'SALE' },
+      });
+      await lockProducts(tx, saleEntries.map((e) => e.productId));
+      for (const entry of saleEntries) {
+        const qty = -toDecimal(entry.quantity); // sale entries are negative
+        if (qty <= 0) continue;
+        const product = await tx.product.findFirst({
+          where: { id: entry.productId, organizationId },
+          select: { trackInventory: true },
+        });
+        if (product?.trackInventory) {
+          await tx.product.update({ where: { id: entry.productId }, data: { openingStock: { increment: qty } } });
+        }
+        await this.inventoryEngine.recordStockMovement(tx, {
+          organizationId,
+          warehouseId: entry.warehouseId,
+          productId: entry.productId,
+          variantId: entry.variantId || undefined,
+          batchLotId: entry.batchLotId || undefined,
+          movementType: 'ADJUSTMENT_IN',
+          quantity: qty,
+          rate: toDecimal(entry.rate),
+          referenceType: 'INVOICE_CANCEL',
+          referenceId: invoiceId,
+          notes: `Invoice ${invoice.invoiceNumber} cancelled`,
+          createdBy: userId,
+        });
+      }
+
+      // Reverse the sales journal entry (swap debits/credits) so the ledger nets to zero.
+      const entries = await tx.journalEntry.findMany({
+        where: { organizationId, invoiceId, referenceType: 'INVOICE', isPosted: true },
+        include: { lines: true },
+      });
+      for (const je of entries) {
+        await tx.journalEntry.create({
+          data: {
+            organizationId,
+            entryNumber: `${je.entryNumber}-REV`,
+            type: je.type,
+            referenceType: 'INVOICE_CANCEL',
+            referenceId: invoiceId,
+            invoiceId,
+            date: new Date(),
+            description: `Reversal of ${je.entryNumber} (invoice ${invoice.invoiceNumber} cancelled)`,
+            totalDebit: je.totalCredit,
+            totalCredit: je.totalDebit,
+            isPosted: true,
+            postedAt: new Date(),
+            createdBy: userId,
+            lines: {
+              create: je.lines.map((l) => ({
+                accountId: l.accountId,
+                costCenterId: l.costCenterId,
+                description: `Reversal: ${l.description ?? ''}`.trim(),
+                debitAmount: l.creditAmount,
+                creditAmount: l.debitAmount,
+                currency: l.currency,
+                exchangeRate: l.exchangeRate,
+                sortOrder: l.sortOrder,
+              })),
+            },
+          },
+        });
+      }
+
+      // A quotation converted into this invoice can be converted again.
+      await tx.quotation.updateMany({
+        where: { organizationId, convertedToInvoiceId: invoiceId, status: 'CONVERTED' },
+        data: { status: 'ACCEPTED', convertedToInvoiceId: null },
+      });
+
+      // Give the invoiced quantities back to the sales order.
+      if (invoice.salesOrderId) {
+        await this.releaseSalesOrderFulfillment(tx, invoice.salesOrderId, invoice.items);
+      }
+    }, { maxWait: 10000, timeout: 30000 });
+
+    await cache.del(CacheService.keys.dashboardStats(organizationId));
 
     return { message: 'Invoice cancelled successfully' };
   }
@@ -507,25 +569,85 @@ export class InvoiceService {
     return { subtotal, discountAmount, taxableAmount, cgstAmount, sgstAmount, igstAmount, taxAmount, totalAmount };
   }
 
-  private async getNextInvoiceNumber(organizationId: string): Promise<string> {
-    const org = await prisma.organization.findUnique({
+  /**
+   * Next number of the org's invoice sequence (INV-000015 style, prefix from organization.invoicePrefix).
+   * Derived from the highest existing number under a per-org advisory lock held by `tx`, so it continues
+   * existing sequences, never reuses a number after deletes and cannot hand the same number to two requests.
+   */
+  private async getNextInvoiceNumber(tx: Prisma.TransactionClient, organizationId: string): Promise<string> {
+    const org = await tx.organization.findUnique({
       where: { id: organizationId },
       select: { invoicePrefix: true },
     });
 
-    const prefix = org?.invoicePrefix || 'INV';
-    const cacheKey = CacheService.keys.invoiceSeq(organizationId);
+    const prefix = (org?.invoicePrefix || 'INV') + '-';
+    return nextSequenceNumber(tx, organizationId, 'invoice', prefix, 6);
+  }
 
-    // Atomic increment
-    const seq = await cache['redis'].incr(cacheKey);
-    if (seq === 1) {
-      // Initialize from DB if first time
-      const count = await prisma.invoice.count({ where: { organizationId } });
-      await cache['redis'].set(cacheKey, count + 1);
-      return generateSequenceNumber(prefix + '-', count + 1);
+  /** Every id an invoice references must belong to the caller's organization. */
+  private async assertReferencesBelongToOrg(organizationId: string, input: CreateInvoiceInput) {
+    const uniq = (ids: Array<string | undefined | null>) => [...new Set(ids.filter((x): x is string => !!x))];
+    const productIds = uniq(input.items.map((i) => i.productId));
+    const variantIds = uniq(input.items.map((i) => i.variantId));
+    const warehouseIds = uniq(input.items.map((i) => i.warehouseId));
+    const taxRateIds = uniq(input.items.map((i) => i.taxRateId));
+
+    const [customer, salesOrder, coupon, products, variants, warehouses, taxRates] = await Promise.all([
+      input.customerId ? prisma.customer.count({ where: { id: input.customerId, organizationId } }) : 1,
+      input.salesOrderId ? prisma.salesOrder.count({ where: { id: input.salesOrderId, organizationId } }) : 1,
+      input.couponId ? prisma.coupon.count({ where: { id: input.couponId, organizationId } }) : 1,
+      productIds.length ? prisma.product.count({ where: { id: { in: productIds }, organizationId } }) : 0,
+      variantIds.length ? prisma.productVariant.count({ where: { id: { in: variantIds }, product: { organizationId } } }) : 0,
+      warehouseIds.length ? prisma.warehouse.count({ where: { id: { in: warehouseIds }, organizationId, isActive: true } }) : 0,
+      taxRateIds.length ? prisma.taxRate.count({ where: { id: { in: taxRateIds }, organizationId } }) : 0,
+    ]);
+
+    if (!customer) throw new NotFoundError('Customer', input.customerId);
+    if (!salesOrder) throw new NotFoundError('Sales order', input.salesOrderId);
+    if (!coupon) throw new NotFoundError('Coupon', input.couponId);
+    if (products !== productIds.length) throw new BadRequestError('One or more products were not found');
+    if (variants !== variantIds.length) throw new BadRequestError('One or more product variants were not found');
+    if (warehouses !== warehouseIds.length) throw new BadRequestError('One or more warehouses were not found or are inactive');
+    if (taxRates !== taxRateIds.length) throw new BadRequestError('One or more tax rates were not found');
+  }
+
+  /**
+   * Takes sold quantities out of stock for inventory-tracked products: a SALE stock entry in the line's
+   * warehouse (validated to belong to the org, else the default warehouse) + product.openingStock, always
+   * together. Untracked products/services touch neither. Short stock does not block the sale (policy).
+   */
+  private async deductStockForInvoice(tx: Prisma.TransactionClient, organizationId: string, invoiceId: string, items: any[], userId: string) {
+    const productIds = [...new Set(items.map((i) => i.productId).filter(Boolean))] as string[];
+    if (!productIds.length) return;
+    const tracked = new Set(
+      (await tx.product.findMany({ where: { id: { in: productIds }, organizationId, trackInventory: true }, select: { id: true } })).map((p) => p.id),
+    );
+    if (!tracked.size) return;
+    await lockProducts(tx, [...tracked]);
+
+    for (const item of items) {
+      if (!item.productId || !tracked.has(item.productId)) continue;
+      const warehouse = await resolveWarehouse(tx, organizationId, item.warehouseId);
+
+      // Atomic decrement: read-modify-write would lose concurrent sales.
+      await tx.product.update({
+        where: { id: item.productId },
+        data: { openingStock: { decrement: toDecimal(item.quantity) } },
+      });
+
+      await this.inventoryEngine.recordStockMovement(tx, {
+        organizationId,
+        warehouseId: warehouse.id,
+        productId: item.productId,
+        variantId: item.variantId || undefined,
+        movementType: 'SALE',
+        quantity: -toDecimal(item.quantity),
+        rate: toDecimal(item.unitPrice),
+        referenceType: 'INVOICE',
+        referenceId: invoiceId,
+        createdBy: userId,
+      });
     }
-
-    return generateSequenceNumber(prefix + '-', seq);
   }
 
   private async getInvoiceOrThrow(invoiceId: string, organizationId: string) {
@@ -539,33 +661,58 @@ export class InvoiceService {
   }
 
   private async updateSalesOrderFulfillment(tx: any, salesOrderId: string, invoiceItems: any[]) {
+    await this.adjustSalesOrderFulfillment(tx, salesOrderId, invoiceItems, 1);
+  }
+
+  private async releaseSalesOrderFulfillment(tx: any, salesOrderId: string, invoiceItems: any[]) {
+    await this.adjustSalesOrderFulfillment(tx, salesOrderId, invoiceItems, -1);
+  }
+
+  /**
+   * Adds (direction 1) or removes (-1) invoiced quantities on the order's lines, spreading a quantity over
+   * several lines of the same product when needed, then recomputes the order status.
+   */
+  private async adjustSalesOrderFulfillment(tx: any, salesOrderId: string, invoiceItems: any[], direction: 1 | -1) {
     const salesOrder = await tx.salesOrder.findUnique({
       where: { id: salesOrderId },
-      include: { items: true },
+      include: { items: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
     });
 
-    if (!salesOrder) return;
+    if (!salesOrder || salesOrder.status === 'CANCELLED') return;
 
-    // Update fulfilled quantities
+    const fulfilled = new Map<string, number>(salesOrder.items.map((i: any) => [i.id, toDecimal(i.fulfilledQty)]));
+
     for (const invoiceItem of invoiceItems) {
-      if (invoiceItem.productId) {
-        const soItem = salesOrder.items.find((i: any) => i.productId === invoiceItem.productId);
-        if (soItem) {
-          await tx.salesOrderItem.update({
-            where: { id: soItem.id },
-            data: { fulfilledQty: { increment: toDecimal(invoiceItem.quantity) } },
-          });
-        }
+      if (!invoiceItem.productId) continue;
+      let qty = toDecimal(invoiceItem.quantity);
+      const lines = salesOrder.items.filter((i: any) => i.productId === invoiceItem.productId);
+      if (direction === -1) lines.reverse();
+      for (const line of lines) {
+        if (qty <= 0) break;
+        const done = fulfilled.get(line.id)!;
+        const room = direction === 1 ? toDecimal(line.quantity) - done : done;
+        if (room <= 0) continue;
+        const take = Math.min(room, qty);
+        fulfilled.set(line.id, roundTo(done + direction * take, 3));
+        qty = roundTo(qty - take, 3);
+      }
+      // Over-invoicing (more than ordered) is booked on the first line so it is not lost.
+      if (qty > 0 && direction === 1 && lines.length) {
+        fulfilled.set(lines[0].id, roundTo(fulfilled.get(lines[0].id)! + qty, 3));
       }
     }
 
-    // Check if fully fulfilled
-    const updatedItems = await tx.salesOrderItem.findMany({ where: { salesOrderId } });
-    const allFulfilled = updatedItems.every((i: any) => toDecimal(i.fulfilledQty) >= toDecimal(i.quantity));
+    for (const line of salesOrder.items) {
+      if (fulfilled.get(line.id) !== toDecimal(line.fulfilledQty)) {
+        await tx.salesOrderItem.update({ where: { id: line.id }, data: { fulfilledQty: fulfilled.get(line.id) } });
+      }
+    }
 
+    const all = salesOrder.items.every((i: any) => fulfilled.get(i.id)! >= toDecimal(i.quantity));
+    const any = salesOrder.items.some((i: any) => fulfilled.get(i.id)! > 0);
     await tx.salesOrder.update({
       where: { id: salesOrderId },
-      data: { status: allFulfilled ? 'INVOICED' : 'PARTIALLY_FULFILLED' },
+      data: { status: all ? 'INVOICED' : any ? 'PARTIALLY_FULFILLED' : 'CONFIRMED' },
     });
   }
 }

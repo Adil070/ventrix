@@ -8,6 +8,7 @@ import { z } from 'zod';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { formatDate, cn } from '@/lib/utils';
+import { dropEmpty } from '@/lib/business';
 import { PageHeader, Button, Card, StatusBadge, EmptyState } from '@/components/shared';
 import { Plus, X, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 
@@ -21,6 +22,12 @@ const TaskSchema = z.object({
 
 type TaskForm = z.infer<typeof TaskSchema>;
 
+function apiError(e: any, fallback: string) {
+  const data = e?.response?.data;
+  const first = (data?.details ?? data?.errors)?.[0];
+  return first ? `${first.field}: ${first.message}` : data?.message || data?.error || fallback;
+}
+
 const priorityColors: Record<string, string> = {
   LOW: 'text-gray-500 bg-gray-100',
   MEDIUM: 'text-blue-600 bg-blue-50',
@@ -33,7 +40,8 @@ export default function CRMTasksPage() {
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
 
-  const { data, isLoading } = useQuery({ queryKey: ['crm-tasks', statusFilter], queryFn: () => api.crm.tasks.list({ status: statusFilter || undefined }), select: r => r.data.data });
+  // paginatedResponse: rows are r.data.data (array). Load all and filter here so the counts above stay correct.
+  const { data, isLoading } = useQuery({ queryKey: ['crm-tasks'], queryFn: () => api.crm.tasks.list({ limit: 100 }), select: r => (r.data.data ?? []) as any[] });
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<TaskForm>({
     resolver: zodResolver(TaskSchema),
@@ -41,20 +49,23 @@ export default function CRMTasksPage() {
   });
 
   const createMut = useMutation({
-    mutationFn: (d: TaskForm) => api.crm.tasks.create(d),
+    // A blank due date ('') fails the API's date check, so drop empty fields.
+    mutationFn: (d: TaskForm) => api.crm.tasks.create(dropEmpty(d)),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['crm-tasks'] }); toast.success('Task created'); setShowForm(false); reset(); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
+    onError: (e: any) => toast.error(apiError(e, 'Could not create task')),
   });
 
   const updateMut = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) => api.crm.tasks.update(id, { status }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['crm-tasks'] }); toast.success('Task updated'); },
+    onError: (e: any) => toast.error(apiError(e, 'Could not update task')),
   });
 
   const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none";
 
-  const tasks = data?.tasks || [];
-  const counts = { TODO: tasks.filter((t: any) => t.status === 'TODO').length, IN_PROGRESS: tasks.filter((t: any) => t.status === 'IN_PROGRESS').length, COMPLETED: tasks.filter((t: any) => t.status === 'COMPLETED').length };
+  const allTasks = data ?? [];
+  const tasks = statusFilter ? allTasks.filter((t: any) => t.status === statusFilter) : allTasks;
+  const counts = { TODO: allTasks.filter((t: any) => t.status === 'TODO').length, IN_PROGRESS: allTasks.filter((t: any) => t.status === 'IN_PROGRESS').length, COMPLETED: allTasks.filter((t: any) => t.status === 'COMPLETED').length };
 
   return (
     <div className="space-y-6">
@@ -116,7 +127,7 @@ export default function CRMTasksPage() {
               <button onClick={() => { setShowForm(false); reset(); }}><X className="w-5 h-5 text-gray-500" /></button>
             </div>
             <form onSubmit={handleSubmit(d => createMut.mutate(d))} className="p-6 space-y-4">
-              <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title *</label><input {...register('title')} className={inputCls} placeholder="Follow up with customer" /></div>
+              <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Title *</label><input {...register('title')} className={inputCls} placeholder="Follow up with customer" />{errors.title && <p className="text-red-500 text-xs mt-1">{errors.title.message}</p>}</div>
               <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label><textarea {...register('description')} rows={2} className={inputCls} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>

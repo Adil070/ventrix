@@ -8,18 +8,20 @@ import { z } from 'zod';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { dropEmpty, plural } from '@/lib/business';
 import { PageHeader, Button, Card, EmptyState, StatusBadge } from '@/components/shared';
 import { Plus, X, TrendingUp, Users, Target, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 
 const LeadSchema = z.object({
   name: z.string().min(1, 'Name required'),
-  email: z.string().email().optional().or(z.literal('')),
-  mobile: z.string().optional(),
+  email: z.string().email('Enter a valid email').optional().or(z.literal('')),
+  phone: z.string().optional(),
   company: z.string().optional(),
   source: z.string().optional(),
-  status: z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST']).default('NEW'),
-  value: z.coerce.number().optional(),
+  status: z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST', 'INACTIVE']).default('NEW'),
+  // Kept as text so a blank box means "no value" instead of 0; converted in toPayload.
+  expectedValue: z.string().optional().refine(v => !v || (!isNaN(Number(v)) && Number(v) >= 0), 'Enter a valid amount'),
   expectedCloseDate: z.string().optional(),
   notes: z.string().optional(),
 });
@@ -27,6 +29,35 @@ const LeadSchema = z.object({
 type LeadForm = z.infer<typeof LeadSchema>;
 
 const PIPELINE_STAGES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'];
+const ALL_STATUSES = [...PIPELINE_STAGES, 'INACTIVE'];
+const CLOSED = ['WON', 'LOST', 'INACTIVE'];
+
+// API field names: phone, expectedValue (number), expectedCloseDate (date). Blank strings fail validation, so drop them.
+function toPayload(d: LeadForm) {
+  const { expectedValue, ...rest } = d;
+  return dropEmpty({ ...rest, expectedValue: expectedValue ? Number(expectedValue) : undefined });
+}
+
+// Lead row from the API -> form values (Decimal comes back as a string, dates as ISO).
+function toForm(lead: any): LeadForm {
+  return {
+    name: lead.name ?? '',
+    email: lead.email ?? '',
+    phone: lead.phone ?? '',
+    company: lead.company ?? '',
+    source: lead.source ?? '',
+    status: lead.status ?? 'NEW',
+    expectedValue: lead.expectedValue != null ? String(Number(lead.expectedValue)) : '',
+    expectedCloseDate: lead.expectedCloseDate ? String(lead.expectedCloseDate).slice(0, 10) : '',
+    notes: lead.notes ?? '',
+  };
+}
+
+function apiError(e: any, fallback: string) {
+  const data = e?.response?.data;
+  const first = (data?.details ?? data?.errors)?.[0];
+  return first ? `${first.field}: ${first.message}` : data?.message || data?.error || fallback;
+}
 const stageColors: Record<string, string> = {
   NEW: 'bg-blue-50 border-blue-200', CONTACTED: 'bg-purple-50 border-purple-200', QUALIFIED: 'bg-yellow-50 border-yellow-200',
   PROPOSAL: 'bg-orange-50 border-orange-200', NEGOTIATION: 'bg-pink-50 border-pink-200', WON: 'bg-green-50 border-green-200', LOST: 'bg-red-50 border-red-200',
@@ -39,30 +70,47 @@ export default function LeadsPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [status, setStatus] = useState('');
 
-  const { data, isLoading } = useQuery({ queryKey: ['leads', status], queryFn: () => api.crm.listLeads({ status: status || undefined, limit: 100 }), select: r => r.data.data });
-  const { data: pipeline } = useQuery({ queryKey: ['pipeline'], queryFn: () => api.crm.getPipeline(), select: r => r.data.data, enabled: view === 'pipeline' });
+  // paginatedResponse: rows are r.data.data (array), count is r.data.pagination.total
+  const { data, isLoading } = useQuery({
+    queryKey: ['leads', status],
+    queryFn: () => api.crm.listLeads({ status: status || undefined, limit: 100 }),
+    select: r => ({ leads: (r.data.data ?? []) as any[], total: Number(r.data.pagination?.total ?? 0) }),
+  });
+  // Pipeline: [{ status, _count: { id }, _sum: { expectedValue } }] grouped across all leads
+  const { data: pipeline } = useQuery({ queryKey: ['pipeline'], queryFn: () => api.crm.getPipeline(), select: r => (r.data.data ?? []) as any[] });
+  const stageCount = (s: string) => pipeline?.find(p => p.status === s)?._count?.id ?? 0;
+  const stageValue = (s: string) => Number(pipeline?.find(p => p.status === s)?._sum?.expectedValue ?? 0);
+  const totalLeads = pipeline?.reduce((n, p) => n + (p._count?.id ?? 0), 0) ?? 0;
+  const openStages = PIPELINE_STAGES.filter(s => !CLOSED.includes(s));
+  const stats = [
+    { label: 'All leads', count: totalLeads, value: null as number | null, icon: Users },
+    { label: 'Open deals', count: openStages.reduce((n, s) => n + stageCount(s), 0), value: openStages.reduce((n, s) => n + stageValue(s), 0), icon: TrendingUp },
+    { label: 'Won', count: stageCount('WON'), value: stageValue('WON'), icon: CheckCircle },
+    { label: 'Lost', count: stageCount('LOST'), value: stageValue('LOST'), icon: Target },
+  ];
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<LeadForm>({ resolver: zodResolver(LeadSchema) });
 
   const saveMut = useMutation({
-    mutationFn: (d: LeadForm) => editId ? api.crm.updateLead(editId, d) : api.crm.createLead(d),
+    mutationFn: (d: LeadForm) => editId ? api.crm.updateLead(editId, toPayload(d)) : api.crm.createLead(toPayload(d)),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['leads'] }); qc.invalidateQueries({ queryKey: ['pipeline'] }); toast.success(editId ? 'Lead updated' : 'Lead created'); setShowForm(false); reset(); setEditId(null); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
+    onError: (e: any) => toast.error(apiError(e, 'Could not save lead')),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.crm.deleteLead(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['leads'] }); toast.success('Lead deleted'); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['leads'] }); qc.invalidateQueries({ queryKey: ['pipeline'] }); toast.success('Lead deleted'); },
+    onError: (e: any) => toast.error(apiError(e, 'Could not delete lead')),
   });
 
   return (
     <div className="space-y-6">
-      <PageHeader title="CRM — Leads & Pipeline" subtitle={`${data?.total || 0} leads`}
+      <PageHeader title="CRM — Leads & Pipeline" subtitle={plural(data?.total ?? 0, 'lead')}
         actions={
           <div className="flex gap-3">
             <div className="flex border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden">
               <button onClick={() => setView('list')} className={`px-3 py-1.5 text-sm ${view === 'list' ? 'bg-orange-500 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>List</button>
-              <button onClick={() => setView('pipeline')} className={`px-3 py-1.5 text-sm ${view === 'pipeline' ? 'bg-orange-500 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>Pipeline</button>
+              <button onClick={() => { setView('pipeline'); setStatus(''); }} className={`px-3 py-1.5 text-sm ${view === 'pipeline' ? 'bg-orange-500 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>Pipeline</button>
             </div>
             <Button size="sm" onClick={() => { reset({ status: 'NEW' }); setEditId(null); setShowForm(true); }}><Plus className="w-4 h-4" /> Add Lead</Button>
           </div>
@@ -71,11 +119,11 @@ export default function LeadsPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {pipeline?.stages?.slice(0, 4).map((s: any) => (
-          <Card key={s.status} className="p-4">
-            <p className="text-xs text-gray-500 uppercase font-semibold">{s.status}</p>
-            <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{s._count}</p>
-            <p className="text-sm text-orange-600 font-medium">{formatCurrency(s._sum?.value || 0)}</p>
+        {stats.map(s => (
+          <Card key={s.label} className="p-4">
+            <p className="text-xs text-gray-500 uppercase font-semibold flex items-center gap-1"><s.icon className="w-3.5 h-3.5" /> {s.label}</p>
+            <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{s.count}</p>
+            {s.value !== null && <p className="text-sm text-orange-600 font-medium">{formatCurrency(s.value)}</p>}
           </Card>
         ))}
       </div>
@@ -92,10 +140,10 @@ export default function LeadsPage() {
                 </div>
                 <div className="space-y-2">
                   {stageLeads.map((lead: any) => (
-                    <div key={lead.id} className="bg-white rounded-lg p-3 shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition" onClick={() => { setEditId(lead.id); reset(lead); setShowForm(true); }}>
+                    <div key={lead.id} className="bg-white rounded-lg p-3 shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition" onClick={() => { setEditId(lead.id); reset(toForm(lead)); setShowForm(true); }}>
                       <p className="font-medium text-sm text-gray-900">{lead.name}</p>
                       {lead.company && <p className="text-xs text-gray-500">{lead.company}</p>}
-                      {lead.value && <p className="text-sm font-semibold text-orange-600 mt-1">{formatCurrency(lead.value)}</p>}
+                      {lead.expectedValue != null && <p className="text-sm font-semibold text-orange-600 mt-1">{formatCurrency(Number(lead.expectedValue))}</p>}
                       {lead.expectedCloseDate && <p className="text-xs text-gray-400 mt-1">Close: {formatDate(lead.expectedCloseDate)}</p>}
                     </div>
                   ))}
@@ -111,7 +159,7 @@ export default function LeadsPage() {
           <Card className="p-4">
             <select value={status} onChange={e => setStatus(e.target.value)} className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 focus:ring-2 focus:ring-orange-500 outline-none">
               <option value="">All Status</option>
-              {PIPELINE_STAGES.map(s => <option key={s}>{s}</option>)}
+              {ALL_STATUSES.map(s => <option key={s}>{s}</option>)}
             </select>
           </Card>
           <Card>
@@ -123,19 +171,19 @@ export default function LeadsPage() {
                   {!isLoading && data?.leads?.map((lead: any) => (
                     <tr key={lead.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                       <td className="px-4 py-3"><p className="font-medium text-gray-900 dark:text-white">{lead.name}</p>{lead.company && <p className="text-xs text-gray-400">{lead.company}</p>}</td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{lead.mobile || lead.email || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-500">{lead.phone || lead.email || '-'}</td>
                       <td className="px-4 py-3"><StatusBadge status={lead.status} /></td>
-                      <td className="px-4 py-3 font-semibold text-sm">{lead.value ? formatCurrency(lead.value) : '-'}</td>
+                      <td className="px-4 py-3 font-semibold text-sm">{lead.expectedValue != null ? formatCurrency(Number(lead.expectedValue)) : '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-500">{formatDate(lead.expectedCloseDate)}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          <Button variant="ghost" size="sm" onClick={() => { setEditId(lead.id); reset(lead); setShowForm(true); }}>Edit</Button>
+                          <Button variant="ghost" size="sm" onClick={() => { setEditId(lead.id); reset(toForm(lead)); setShowForm(true); }}>Edit</Button>
                           <Button variant="ghost" size="sm" onClick={() => { if (confirm('Delete?')) deleteMut.mutate(lead.id); }} className="text-red-500">Del</Button>
                         </div>
                       </td>
                     </tr>
                   ))}
-                  {!isLoading && !data?.leads?.length && <tr><td colSpan={6}><EmptyState title="No leads" description="Add your first lead to start tracking" action={<Button size="sm" onClick={() => setShowForm(true)}><Plus className="w-4 h-4" /> Add Lead</Button>} /></td></tr>}
+                  {!isLoading && !data?.leads?.length && <tr><td colSpan={6}><EmptyState title="No leads" description="Add your first lead to start tracking" action={<Button size="sm" onClick={() => { reset({ status: 'NEW' }); setEditId(null); setShowForm(true); }}><Plus className="w-4 h-4" /> Add Lead</Button>} /></td></tr>}
                 </tbody>
               </table>
             </div>
@@ -152,18 +200,18 @@ export default function LeadsPage() {
             </div>
             <form onSubmit={handleSubmit(d => saveMut.mutate(d))} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label><input {...register('name')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mobile</label><input {...register('mobile')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label><input {...register('email')} type="email" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+                <div className="col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name *</label><input {...register('name')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" />{errors.name && <p className="text-red-500 text-xs mt-1">{errors.name.message}</p>}</div>
+                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone</label><input {...register('phone')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label><input {...register('email')} type="email" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" />{errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}</div>
                 <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Company</label><input {...register('company')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
                 <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Source</label><input {...register('source')} placeholder="Website, Referral..." className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label><select {...register('status')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none">{PIPELINE_STAGES.map(s => <option key={s}>{s}</option>)}</select></div>
-                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Deal Value (₹)</label><input {...register('value')} type="number" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label><select {...register('status')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none">{ALL_STATUSES.map(s => <option key={s}>{s}</option>)}</select></div>
+                <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Deal Value (₹)</label><input {...register('expectedValue')} type="number" min="0" step="0.01" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" />{errors.expectedValue && <p className="text-red-500 text-xs mt-1">{errors.expectedValue.message}</p>}</div>
                 <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Expected Close</label><input {...register('expectedCloseDate')} type="date" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
                 <div className="col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label><textarea {...register('notes')} rows={2} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
               </div>
               <div className="flex gap-3 justify-end pt-2">
-                <Button variant="secondary" type="button" onClick={() => { setShowForm(false); reset(); }}>Cancel</Button>
+                <Button variant="secondary" type="button" onClick={() => { setShowForm(false); setEditId(null); reset(); }}>Cancel</Button>
                 <Button type="submit" loading={saveMut.isPending}>{editId ? 'Update' : 'Add'} Lead</Button>
               </div>
             </form>

@@ -57,3 +57,6 @@ docker/postgres/data/
 # Test
 test-results/
 playwright-report/
+
+# TypeScript incremental build cache
+*.tsbuildinfo

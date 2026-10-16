@@ -28,7 +28,8 @@ export default function ForgotPasswordPage() {
       await api.auth.forgotPassword(d);
       setSent(true);
     } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'Something went wrong');
+      const data = e?.response?.data;
+      toast.error(data?.details?.[0]?.message || data?.message || 'Something went wrong');
     } finally {
       setLoading(false);
     }
@@ -43,7 +44,7 @@ export default function ForgotPasswordPage() {
               <CheckCircle className="w-8 h-8 text-green-500" />
             </div>
             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Check your email</h2>
-            <p className="text-gray-500">We sent a password reset link to <span className="font-medium text-gray-900 dark:text-white">{email}</span></p>
+            <p className="text-gray-500">If an account exists for <span className="font-medium text-gray-900 dark:text-white">{email}</span>, we have sent it a password reset link.</p>
             <Link href="/auth/login" className="block w-full py-3 text-center text-sm font-medium text-orange-600 hover:text-orange-700">Back to sign in</Link>
           </div>
         ) : (

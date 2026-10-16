@@ -1,19 +1,29 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
-import { formatDate, formatDateTime } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { plural } from '@/lib/business';
 import { PageHeader, Button, Card, EmptyState } from '@/components/shared';
 import { Upload, Download, Trash2, FileText, Image, File, Search } from 'lucide-react';
-import { useRef } from 'react';
 
-const getFileIcon = (mimetype: string) => {
-  if (mimetype?.startsWith('image/')) return Image;
-  if (mimetype?.includes('pdf')) return FileText;
+const getFileIcon = (mimeType?: string | null) => {
+  if (mimeType?.startsWith('image/')) return Image;
+  if (mimeType?.includes('pdf')) return FileText;
   return File;
 };
+
+// The API replies with { message } for most errors but { error } for 400/404 here; a 5xx usually means file storage is unreachable.
+function uploadError(e: any, fileName: string) {
+  const status = e?.response?.status;
+  const data = e?.response?.data;
+  if (!e?.response) return `Could not reach the server to upload ${fileName}.`;
+  if (status === 413) return `${fileName} is too large (max 25 MB).`;
+  if (status >= 500) return `Could not upload ${fileName}: file storage is not available right now. Please try again later.`;
+  return `Could not upload ${fileName}: ${data?.message || data?.error || 'upload failed'}`;
+}
 
 export default function DocumentsPage() {
   const qc = useQueryClient();
@@ -21,29 +31,42 @@ export default function DocumentsPage() {
   const [search, setSearch] = useState('');
   const [uploading, setUploading] = useState(false);
 
-  const { data, isLoading } = useQuery({ queryKey: ['documents', search], queryFn: () => api.documents.list({ search }), select: r => r.data.data });
+  // paginatedResponse: rows are r.data.data (array), count is r.data.pagination.total.
+  // Search is done here: the API's ?search= filter queries a `tags` column Document doesn't have and returns 500.
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['documents'],
+    queryFn: () => api.documents.list({ limit: 100 }),
+    select: r => ({ documents: (r.data.data ?? []) as any[], total: Number(r.data.pagination?.total ?? 0) }),
+  });
+  const term = search.trim().toLowerCase();
+  const documents = (data?.documents ?? []).filter(d => !term || `${d.name} ${d.fileName}`.toLowerCase().includes(term));
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.documents.delete(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['documents'] }); toast.success('Document deleted'); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
+    onError: (e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || 'Could not delete document'),
   });
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
+  const uploadFiles = async (files: FileList | null) => {
     if (!files?.length) return;
     setUploading(true);
+    let done = 0;
     try {
       for (const file of Array.from(files)) {
         const form = new FormData();
         form.append('file', file);
         form.append('name', file.name);
-        await api.documents.upload(form);
+        try {
+          await api.documents.upload(form);
+          done++;
+        } catch (e: any) {
+          toast.error(uploadError(e, file.name), { duration: 6000 });
+        }
       }
-      qc.invalidateQueries({ queryKey: ['documents'] });
-      toast.success(`${files.length} file(s) uploaded`);
-    } catch (e: any) {
-      toast.error(e?.response?.data?.message || 'Upload failed');
+      if (done) {
+        qc.invalidateQueries({ queryKey: ['documents'] });
+        toast.success(`${plural(done, 'file')} uploaded`);
+      }
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -53,7 +76,9 @@ export default function DocumentsPage() {
   const handleDownload = async (doc: any) => {
     try {
       const res = await api.documents.getDownloadUrl(doc.id);
-      window.open(res.data.data.url, '_blank');
+      const url = res.data?.data?.url;
+      if (!url) throw new Error('no url');
+      window.open(url, '_blank');
     } catch {
       toast.error('Could not get download link');
     }
@@ -61,10 +86,10 @@ export default function DocumentsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Documents" subtitle={`${data?.total || 0} documents`}
+      <PageHeader title="Documents" subtitle={plural(data?.total ?? 0, 'document')}
         actions={
           <>
-            <input ref={fileRef} type="file" className="hidden" multiple onChange={handleUpload} />
+            <input ref={fileRef} type="file" className="hidden" multiple onChange={e => uploadFiles(e.target.files)} />
             <Button size="sm" loading={uploading} onClick={() => fileRef.current?.click()}><Upload className="w-4 h-4" /> Upload Files</Button>
           </>
         }
@@ -78,7 +103,7 @@ export default function DocumentsPage() {
       </Card>
 
       {/* Upload Drop Zone */}
-      <div onClick={() => fileRef.current?.click()} className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition">
+      <div onClick={() => fileRef.current?.click()} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); uploadFiles(e.dataTransfer.files); }} className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition">
         <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
         <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Click or drag files to upload</p>
         <p className="text-xs text-gray-400 mt-1">PDF, Images, Word, Excel — up to 25MB each</p>
@@ -87,8 +112,8 @@ export default function DocumentsPage() {
       {/* Documents Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {isLoading && Array(8).fill(0).map((_, i) => <div key={i} className="h-36 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-xl" />)}
-        {!isLoading && data?.documents?.map((doc: any) => {
-          const Icon = getFileIcon(doc.mimetype);
+        {!isLoading && documents.map((doc: any) => {
+          const Icon = getFileIcon(doc.mimeType);
           return (
             <Card key={doc.id} className="p-4 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between mb-3">
@@ -98,13 +123,14 @@ export default function DocumentsPage() {
                   <button onClick={() => { if (confirm('Delete?')) deleteMut.mutate(doc.id); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition"><Trash2 className="w-4 h-4" /></button>
                 </div>
               </div>
-              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{doc.name}</p>
+              <p className="text-sm font-medium text-gray-900 dark:text-white truncate" title={doc.name}>{doc.name}</p>
               <p className="text-xs text-gray-400 mt-0.5">{formatDate(doc.createdAt)}</p>
-              {doc.size && <p className="text-xs text-gray-400">{(doc.size / 1024 / 1024).toFixed(2)} MB</p>}
+              {doc.fileSize != null && <p className="text-xs text-gray-400">{doc.fileSize < 1024 * 1024 ? `${Math.max(1, Math.round(doc.fileSize / 1024))} KB` : `${(doc.fileSize / 1024 / 1024).toFixed(2)} MB`}</p>}
             </Card>
           );
         })}
-        {!isLoading && !data?.documents?.length && <div className="col-span-4"><EmptyState title="No documents" description="Upload your first document" action={<Button size="sm" onClick={() => fileRef.current?.click()}><Upload className="w-4 h-4" /> Upload</Button>} /></div>}
+        {isError && <div className="col-span-full"><EmptyState title="Could not load documents" description="Please refresh the page to try again." /></div>}
+        {!isLoading && !isError && !documents.length && <div className="col-span-full"><EmptyState title={term ? 'No matching documents' : 'No documents'} description={term ? 'Try a different search' : 'Upload your first document'} action={<Button size="sm" onClick={() => fileRef.current?.click()}><Upload className="w-4 h-4" /> Upload</Button>} /></div>}
       </div>
     </div>
   );

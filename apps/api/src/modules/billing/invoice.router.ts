@@ -5,6 +5,7 @@ import { authenticate, requirePermission } from '../../shared/middleware/auth.mi
 import { validateBody, validateQuery, validateParams } from '../../shared/middleware/validate.middleware';
 import { successResponse, createdResponse, paginatedResponse } from '../../shared/helpers/response.helper';
 import { auditMiddleware } from '../../shared/middleware/audit.middleware';
+import { tenantMiddleware } from '../../shared/middleware/tenant';
 import {
   CreateInvoiceDto,
   UpdateInvoiceDto,
@@ -17,7 +18,7 @@ import { PDFService } from '../documents/pdf.service';
 
 export const invoiceRouter = Router();
 
-invoiceRouter.use(authenticate);
+invoiceRouter.use(authenticate, tenantMiddleware);
 
 // GET /invoices
 invoiceRouter.get(
@@ -125,7 +126,8 @@ invoiceRouter.patch(
     const result = await invoiceService.cancelInvoice(
       req.organizationId!,
       req.params.id,
-      req.body.reason
+      req.body.reason,
+      req.user!.userId
     );
     res.json(successResponse(result));
   }

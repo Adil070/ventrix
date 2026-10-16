@@ -6,8 +6,18 @@ import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { PageHeader, Button, Card, EmptyState, StatusBadge } from '@/components/shared';
+import { BILL_STATUS_TEXT, plural } from '@/lib/business';
 import { Plus, Search, Download, FileText, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+
+// Purchase status is a receiving status (DRAFT/SENT/RECEIVED/BILLED/CANCELLED); whether the bill is paid
+// comes from balanceAmount, so derive the badge from the money fields (Decimals arrive as strings).
+function payStatus(p: any): string {
+  if (p.status === 'CANCELLED' || p.status === 'DRAFT') return p.status;
+  const balance = Number(p.balanceAmount || 0);
+  if (balance <= 0) return 'PAID';
+  return Number(p.paidAmount || 0) > 0 ? 'PARTIALLY_PAID' : 'CONFIRMED';
+}
 
 export default function PurchasesPage() {
   const qc = useQueryClient();
@@ -23,12 +33,12 @@ export default function PurchasesPage() {
   const cancelMut = useMutation({
     mutationFn: (id: string) => api.purchases.cancel(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['purchases'] }); toast.success('Purchase cancelled'); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'Could not cancel this purchase'),
   });
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Purchase Bills" subtitle={`${data?.total || 0} bills`}
+      <PageHeader title="Purchase Bills" subtitle={plural(data?.total || 0, 'bill')}
         actions={
           <div className="flex gap-3">
             <Button variant="secondary" size="sm"><Download className="w-4 h-4" /> Export</Button>
@@ -40,7 +50,7 @@ export default function PurchasesPage() {
       <Card className="p-4">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700" placeholder="Search purchases..." />
+          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700" placeholder="Search by purchase # or supplier bill #" />
         </div>
       </Card>
 
@@ -54,13 +64,13 @@ export default function PurchasesPage() {
               {isLoading && Array(6).fill(0).map((_, i) => <tr key={i}><td colSpan={8}><div className="h-10 bg-gray-100 dark:bg-gray-700 animate-pulse m-3 rounded" /></td></tr>)}
               {!isLoading && data?.purchases?.map((p: any) => (
                 <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
-                  <td className="px-4 py-3 font-medium text-orange-600">{p.purchaseNumber}</td>
+                  <td className="px-4 py-3"><p className="font-medium text-orange-600">{p.purchaseNumber}</p>{p.billNumber && <p className="text-xs text-gray-400">Supplier bill: {p.billNumber}</p>}</td>
                   <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{p.supplier?.name}</td>
                   <td className="px-4 py-3 text-sm text-gray-500">{formatDate(p.purchaseDate)}</td>
                   <td className="px-4 py-3 font-semibold">{formatCurrency(p.totalAmount)}</td>
                   <td className="px-4 py-3 text-green-600 font-semibold">{formatCurrency(p.paidAmount)}</td>
-                  <td className="px-4 py-3 text-red-600 font-semibold">{formatCurrency(p.balanceAmount)}</td>
-                  <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                  <td className={`px-4 py-3 font-semibold ${p.status !== 'CANCELLED' && Number(p.balanceAmount) > 0 ? 'text-red-600' : 'text-gray-400'}`}>{formatCurrency(p.balanceAmount)}</td>
+                  <td className="px-4 py-3">{(() => { const st = payStatus(p); return <StatusBadge status={st} label={BILL_STATUS_TEXT[st] || st} />; })()}</td>
                   <td className="px-4 py-3">
                     {p.status !== 'CANCELLED' && (
                       <Button variant="ghost" size="sm" onClick={() => { if (confirm('Cancel this purchase?')) cancelMut.mutate(p.id); }}>Cancel</Button>

@@ -28,19 +28,18 @@ class ApiClient {
       return config;
     });
 
-    // Response interceptor - handle auth errors
+    // Response interceptor - renew the session once on 401, then retry the request
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
-        if (error.response?.status === 401) {
-          // Try refresh
-          const refreshed = await this.refreshToken();
-          if (!refreshed) {
-            this.clearAuth();
-            window.location.href = '/auth/login';
-          } else if (error.config) {
-            return this.client(error.config);
-          }
+        const config = error.config as (typeof error.config & { _retried?: boolean }) | undefined;
+        // A 401 from /auth/* (e.g. wrong password) is a real answer, not an expired session.
+        const isAuthCall = config?.url?.startsWith('/auth/');
+        if (error.response?.status === 401 && config && !config._retried && !isAuthCall) {
+          config._retried = true;
+          if (await this.refreshToken()) return this.client(config);
+          this.clearAuth();
+          window.location.href = '/auth/login';
         }
         return Promise.reject(error);
       }
@@ -61,31 +60,43 @@ class ApiClient {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('organizationId');
+    // The persisted auth store would otherwise still say "signed in" after the redirect.
+    localStorage.removeItem('auth-storage');
   }
 
-  private async refreshToken(): Promise<boolean> {
-    try {
-      const refreshToken = localStorage.getItem('refreshToken');
-      if (!refreshToken) return false;
+  private refreshing: Promise<boolean> | null = null;
 
-      const response = await axios.post(`${API_URL}/api/v1/auth/refresh`, { refreshToken });
-      const { accessToken } = response.data.data;
-      localStorage.setItem('accessToken', accessToken);
-      return true;
-    } catch {
-      return false;
+  // Refresh tokens are single-use (the API rotates them), so concurrent 401s must share one refresh.
+  private refreshToken(): Promise<boolean> {
+    if (!this.refreshing) {
+      this.refreshing = (async () => {
+        try {
+          const refreshToken = localStorage.getItem('refreshToken');
+          if (!refreshToken) return false;
+          const response = await axios.post(`${API_URL}/api/v1/auth/refresh-token`, { refreshToken });
+          const tokens = response.data.data;
+          localStorage.setItem('accessToken', tokens.accessToken);
+          if (tokens.refreshToken) localStorage.setItem('refreshToken', tokens.refreshToken);
+          return true;
+        } catch {
+          return false;
+        } finally {
+          this.refreshing = null;
+        }
+      })();
     }
+    return this.refreshing;
   }
 
   // Auth
   auth = {
     register: (data: any) => this.client.post('/auth/register', data),
     login: (data: any) => this.client.post('/auth/login', data),
-    loginWithOTP: (data: any) => this.client.post('/auth/login/otp', data),
+    loginWithOTP: (data: any) => this.client.post('/auth/otp/verify', data),
     sendOTP: (data: any) => this.client.post('/auth/otp/send', data),
     loginWithGoogle: (data: any) => this.client.post('/auth/google', data),
-    logout: () => this.client.post('/auth/logout'),
-    refreshToken: (data: any) => this.client.post('/auth/refresh', data),
+    logout: () => this.client.post('/auth/logout', { refreshToken: localStorage.getItem('refreshToken') }),
+    refreshToken: (data: any) => this.client.post('/auth/refresh-token', data),
     forgotPassword: (data: any) => this.client.post('/auth/forgot-password', data),
     resetPassword: (data: any) => this.client.post('/auth/reset-password', data),
     verifyEmail: (token: string) => this.client.get(`/auth/verify-email?token=${token}`),
@@ -165,6 +176,8 @@ class ApiClient {
   invoices = {
     list: (params?: any) => this.client.get('/invoices', { params }),
     create: (data: any) => this.client.post('/invoices', data),
+    outstanding: (customerId?: string) => this.client.get('/invoices/outstanding', { params: { customerId } }),
+    stats: (params?: { from?: string; to?: string }) => this.client.get('/invoices/stats', { params }),
     get: (id: string) => this.client.get(`/invoices/${id}`),
     update: (id: string, data: any) => this.client.put(`/invoices/${id}`, data),
     confirm: (id: string) => this.client.patch(`/invoices/${id}/confirm`),
@@ -307,7 +320,6 @@ class ApiClient {
     get: (id: string) => this.client.get(`/employees/${id}`),
     update: (id: string, data: any) => this.client.put(`/employees/${id}`, data),
     delete: (id: string) => this.client.delete(`/employees/${id}`),
-    markAttendance: (id: string, d: any) => this.client.post(`/employees/${id}/attendance`, d),
     attendance: { get: (id: string, p?: any) => this.client.get(`/employees/${id}/attendance`, { params: p }), record: (d: any) => this.client.post('/employees/attendance', d) },
   };
 
@@ -358,7 +370,8 @@ class ApiClient {
   users = {
     me: () => this.client.get('/users/me'),
     updateMe: (d: any) => this.client.put('/users/me', d),
-    changePassword: (d: any) => this.client.post('/users/me/change-password', d),
+    // Sends this session's refresh token so the API keeps it signed in while signing out other devices.
+    changePassword: (d: any) => this.client.post('/users/me/change-password', { ...d, refreshToken: localStorage.getItem('refreshToken') }),
     members: () => this.client.get('/users/organization/members'),
     getOrgMembers: () => this.client.get('/users/organization/members'),
     invite: (d: any) => this.client.post('/users/organization/members/invite', d),

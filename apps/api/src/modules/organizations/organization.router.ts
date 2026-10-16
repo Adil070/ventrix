@@ -4,8 +4,10 @@ import { prisma } from '../../infrastructure/database';
 import { successResponse } from '../../shared/helpers/response.helper';
 import { authMiddleware } from '../../shared/middleware/auth.middleware';
 import { tenantMiddleware } from '../../shared/middleware/tenant';
+import { requireOrgRole } from '../../shared/middleware/org-role';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
+import { NotFoundError } from '../../shared/errors';
 
 const router = Router();
 router.use(authMiddleware, tenantMiddleware);
@@ -43,7 +45,10 @@ const UpdateOrgSchema = z.object({
   settings: z.record(z.any()).optional(),
 });
 
-router.put('/', async (req: Request, res: Response) => {
+// Business details, settings and branches are changed by owners and admins only; every member can read them.
+const orgAdmins = requireOrgRole(UserRole.ORG_OWNER, UserRole.BRANCH_ADMIN);
+
+router.put('/', orgAdmins, async (req: Request, res: Response) => {
   const input = UpdateOrgSchema.parse(req.body);
   const org = await prisma.organization.update({
     where: { id: req.organizationId! },
@@ -68,14 +73,16 @@ const CreateBranchSchema = z.object({
   isHeadOffice: z.boolean().default(false),
 });
 
-router.post('/branches', async (req: Request, res: Response) => {
+router.post('/branches', orgAdmins, async (req: Request, res: Response) => {
   const input = CreateBranchSchema.parse(req.body);
   const branch = await prisma.branch.create({ data: { organizationId: req.organizationId!, ...input, address: input.address as Prisma.InputJsonValue } });
   res.status(201).json(successResponse(branch, 'Branch created'));
 });
 
-router.put('/branches/:id', async (req: Request, res: Response) => {
+router.put('/branches/:id', orgAdmins, async (req: Request, res: Response) => {
   const input = CreateBranchSchema.partial().parse(req.body);
+  const existing = await prisma.branch.findFirst({ where: { id: req.params.id, organizationId: req.organizationId! }, select: { id: true } });
+  if (!existing) throw new NotFoundError('Branch', req.params.id);
   const branch = await prisma.branch.update({ where: { id: req.params.id }, data: { ...input, address: input.address as Prisma.InputJsonValue } });
   res.json(successResponse(branch));
 });

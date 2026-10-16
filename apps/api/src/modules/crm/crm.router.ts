@@ -6,6 +6,7 @@ import { authMiddleware } from '../../shared/middleware/auth.middleware';
 import { tenantMiddleware } from '../../shared/middleware/tenant';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
+import { NotFoundError, BadRequestError } from '../../shared/errors';
 
 const router = Router();
 router.use(authMiddleware, tenantMiddleware);
@@ -34,6 +35,31 @@ const CreateTaskSchema = z.object({
   status: z.enum(['TODO', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']).default('TODO'),
 });
 
+// Every by-id lookup is limited to the caller's organization, so another business's record reads as not found.
+async function findLeadOr404(id: string, organizationId: string) {
+  const lead = await prisma.lead.findFirst({ where: { id, organizationId }, select: { id: true } });
+  if (!lead) throw new NotFoundError('Lead', id);
+  return lead;
+}
+
+async function findTaskOr404(id: string, organizationId: string) {
+  const task = await prisma.task.findFirst({ where: { id, organizationId }, select: { id: true } });
+  if (!task) throw new NotFoundError('Task', id);
+  return task;
+}
+
+// A lead or assignee referenced from a task must belong to the same organization.
+async function assertTaskRefs(organizationId: string, input: { leadId?: string; assignedToId?: string }) {
+  if (input.leadId) {
+    const lead = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId }, select: { id: true } });
+    if (!lead) throw new BadRequestError('Lead not found in this organization');
+  }
+  if (input.assignedToId) {
+    const member = await prisma.userOrganization.findFirst({ where: { userId: input.assignedToId, organizationId, isActive: true }, select: { id: true } });
+    if (!member) throw new BadRequestError('Assignee is not a member of this organization');
+  }
+}
+
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.get('/leads', async (req: Request, res: Response) => {
   const { page = 1, limit = 20, status, search, assignedTo } = req.query as any;
@@ -58,29 +84,34 @@ router.post('/leads', async (req: Request, res: Response) => {
 
 router.get('/leads/:id', async (req: Request, res: Response) => {
   const lead = await prisma.lead.findFirst({ where: { id: req.params.id, organizationId: req.organizationId! }, include: { tasks: { orderBy: { createdAt: 'desc' } }, activities: { orderBy: { createdAt: 'desc' } } } });
+  if (!lead) throw new NotFoundError('Lead', req.params.id);
   res.json(successResponse(lead));
 });
 
 router.put('/leads/:id', async (req: Request, res: Response) => {
   const input = CreateLeadSchema.partial().parse(req.body);
+  await findLeadOr404(req.params.id, req.organizationId!);
   const lead = await prisma.lead.update({ where: { id: req.params.id }, data: { ...input, status: input.status as any } });
   res.json(successResponse(lead));
 });
 
 router.patch('/leads/:id', async (req: Request, res: Response) => {
   const input = CreateLeadSchema.partial().parse(req.body);
+  await findLeadOr404(req.params.id, req.organizationId!);
   const lead = await prisma.lead.update({ where: { id: req.params.id }, data: { ...input, status: input.status as any } });
   res.json(successResponse(lead));
 });
 
 router.delete('/leads/:id', async (req: Request, res: Response) => {
+  await findLeadOr404(req.params.id, req.organizationId!);
   await prisma.lead.delete({ where: { id: req.params.id } });
   res.json(successResponse({ message: 'Lead deleted' }));
 });
 
 // Lead activities/notes
 router.post('/leads/:id/notes', async (req: Request, res: Response) => {
-  const { content } = req.body;
+  const { content } = z.object({ content: z.string().min(1) }).parse(req.body);
+  await findLeadOr404(req.params.id, req.organizationId!);
   const note = await prisma.leadActivity.create({ data: { leadId: req.params.id, type: 'NOTE', title: 'Note', description: content, createdBy: req.userId! } });
   res.status(201).json(successResponse(note));
 });
@@ -103,12 +134,15 @@ router.get('/tasks', async (req: Request, res: Response) => {
 
 router.post('/tasks', async (req: Request, res: Response) => {
   const input = CreateTaskSchema.parse(req.body);
+  await assertTaskRefs(req.organizationId!, input);
   const task = await prisma.task.create({ data: { ...input, organizationId: req.organizationId!, status: input.status as any, priority: input.priority as any, createdById: req.userId! } });
   res.status(201).json(successResponse(task));
 });
 
 router.put('/tasks/:id', async (req: Request, res: Response) => {
   const input = CreateTaskSchema.partial().parse(req.body);
+  await findTaskOr404(req.params.id, req.organizationId!);
+  await assertTaskRefs(req.organizationId!, input);
   const task = await prisma.task.update({ where: { id: req.params.id }, data: { ...input, status: input.status as any, priority: input.priority as any } });
   res.json(successResponse(task));
 });

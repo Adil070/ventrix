@@ -5,7 +5,7 @@
 
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["fullTextSearch", "fullTextIndex", "multiSchema"]
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
 }
 
 datasource db {
@@ -329,6 +329,7 @@ model Organization {
   purchases          Purchase[]
   accounts           Account[]
   expenses           Expense[]
+  expenseCategories  ExpenseCategory[]
   leads              Lead[]
   employees          Employee[]
   warehouses         Warehouse[]
@@ -1675,6 +1676,7 @@ model BankTransaction {
 
 model ExpenseCategory {
   id             String    @id @default(cuid())
+  organizationId String?
   parentId       String?
   name           String
   description    String?
@@ -1682,10 +1684,12 @@ model ExpenseCategory {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  organization   Organization?     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   parent         ExpenseCategory?  @relation("ExpenseCategoryChildren", fields: [parentId], references: [id])
   children       ExpenseCategory[] @relation("ExpenseCategoryChildren")
   expenses       Expense[]
 
+  @@index([organizationId])
   @@map("expense_categories")
 }
 

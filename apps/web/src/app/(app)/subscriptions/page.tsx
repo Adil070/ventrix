@@ -16,39 +16,47 @@ const plans = [
 
 export default function SubscriptionsPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['subscription'], queryFn: () => api.subscription.get(), select: r => r.data.data });
+  // GET /subscriptions -> data is the Subscription row itself (or null): { plan, status, trialEndsAt, currentPeriodEnd, cancelAtPeriodEnd, ... }
+  const { data: sub, isLoading } = useQuery({ queryKey: ['subscription'], queryFn: () => api.subscription.get(), select: r => r.data.data ?? null });
 
   const upgradeMut = useMutation({
     mutationFn: (plan: string) => api.subscription.upgrade({ plan }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['subscription'] }); toast.success('Plan upgraded!'); },
+    onSuccess: (r: any) => { qc.invalidateQueries({ queryKey: ['subscription'] }); toast.success(r?.data?.message || 'Plan upgraded'); },
     onError: (e: any) => toast.error(e?.response?.data?.message || 'Upgrade failed'),
   });
 
   const cancelMut = useMutation({
     mutationFn: () => api.subscription.cancel(),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['subscription'] }); toast.success('Subscription cancelled'); },
+    onError: (e: any) => toast.error(e?.response?.data?.message || 'Could not cancel subscription'),
   });
 
-  const currentPlan = data?.subscription?.plan || 'FREE';
+  const currentPlan: string = sub?.plan || 'FREE';
+  const planName = plans.find(p => p.key === currentPlan)?.name ?? currentPlan;
+  // Use status only: /upgrade sets ACTIVE again but leaves cancelAtPeriodEnd=true from an earlier cancel.
+  const isCancelled = sub?.status === 'CANCELLED';
+  // Trial rows only have trialEndsAt; paid rows have currentPeriodEnd.
+  const endsAt = sub?.status === 'TRIAL' ? sub?.trialEndsAt : sub?.currentPeriodEnd;
+  const endsLabel = sub?.status === 'TRIAL' ? 'Trial ends' : isCancelled ? 'Access until' : 'Renews on';
 
   return (
     <div className="space-y-8">
       <PageHeader title="Subscription" subtitle="Manage your plan and billing" />
 
       {/* Current Plan */}
-      {!isLoading && data?.subscription && (
+      {!isLoading && sub && (
         <Card className="p-6">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-gray-500">Current Plan</p>
-              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{currentPlan}</h3>
-              {data.subscription.validUntil && <p className="text-sm text-gray-500 mt-1">Valid until {formatDate(data.subscription.validUntil)}</p>}
+              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{planName}</h3>
+              {endsAt && <p className="text-sm text-gray-500 mt-1">{endsLabel} {formatDate(endsAt)}</p>}
             </div>
-            <StatusBadge status={data.subscription.status || 'ACTIVE'} />
+            <StatusBadge status={sub.status || 'ACTIVE'} />
           </div>
-          {currentPlan !== 'FREE' && (
+          {currentPlan !== 'FREE' && !isCancelled && (
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <Button variant="danger" size="sm" onClick={() => { if (confirm('Cancel subscription?')) cancelMut.mutate(); }}>Cancel Subscription</Button>
+              <Button variant="danger" size="sm" loading={cancelMut.isPending} onClick={() => { if (confirm('Cancel subscription?')) cancelMut.mutate(); }}>Cancel Subscription</Button>
             </div>
           )}
         </Card>
@@ -58,7 +66,7 @@ export default function SubscriptionsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {plans.map(plan => {
           const Icon = plan.icon;
-          const isCurrent = currentPlan === plan.key;
+          const isCurrent = currentPlan === plan.key && !isCancelled;
           return (
             <div key={plan.key} className={`relative rounded-2xl border-2 p-6 flex flex-col ${plan.popular ? 'border-orange-500 shadow-lg shadow-orange-100 dark:shadow-orange-900/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'} ${isCurrent ? 'bg-gray-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-800'}`}>
               {plan.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-orange-500 text-white text-xs font-bold px-4 py-1 rounded-full">Most Popular</div>}
@@ -80,8 +88,8 @@ export default function SubscriptionsPage() {
               {isCurrent ? (
                 <div className="w-full py-2 text-center text-sm font-medium text-gray-500 bg-gray-100 dark:bg-gray-700 rounded-lg">Current Plan</div>
               ) : plan.key !== 'FREE' ? (
-                <Button className="w-full" variant={plan.popular ? 'primary' : 'secondary'} loading={upgradeMut.isPending} onClick={() => upgradeMut.mutate(plan.key)}>
-                  Upgrade to {plan.name}
+                <Button className="w-full" variant={plan.popular ? 'primary' : 'secondary'} loading={upgradeMut.isPending && upgradeMut.variables === plan.key} disabled={upgradeMut.isPending} onClick={() => upgradeMut.mutate(plan.key)}>
+                  {currentPlan === plan.key ? 'Renew' : 'Switch to'} {plan.name}
                 </Button>
               ) : null}
             </div>

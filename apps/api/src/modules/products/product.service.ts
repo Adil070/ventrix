@@ -2,6 +2,9 @@ import { prisma } from '../../infrastructure/database';
 import { NotFoundError, ConflictError, BadRequestError } from '../../shared/errors';
 import type { CreateProductInput, UpdateProductInput, ProductQueryInput } from './product.dto';
 import { Prisma } from '@prisma/client';
+import { InventoryEngine, getDefaultWarehouse, resolveWarehouse } from '../inventory/inventory.engine';
+
+const inventoryEngine = new InventoryEngine();
 
 export class ProductService {
   async createProduct(organizationId: string, input: CreateProductInput) {
@@ -9,6 +12,7 @@ export class ProductService {
       const existing = await prisma.product.findFirst({ where: { organizationId, sku: input.sku } });
       if (existing) throw new ConflictError('SKU already exists');
     }
+    if (input.warehouseId) await resolveWarehouse(prisma, organizationId, input.warehouseId);
     const product = await prisma.product.create({
       data: {
         organizationId,
@@ -97,11 +101,31 @@ export class ProductService {
   async updateProduct(organizationId: string, id: string, input: UpdateProductInput) {
     const product = await prisma.product.findFirst({ where: { id, organizationId } });
     if (!product) throw new NotFoundError('Product not found');
-    return prisma.product.update({
+    if (input.sku && input.sku !== product.sku) {
+      const clash = await prisma.product.findFirst({ where: { organizationId, sku: input.sku, id: { not: id } }, select: { id: true } });
+      if (clash) throw new ConflictError('SKU already exists');
+    }
+    // A stock change made through the product form is booked as an adjustment so the stock ledger
+    // (signed stock entries) keeps matching product.openingStock.
+    const stockDelta = input.openingStock !== undefined ? Number(input.openingStock) - Number(product.openingStock) : 0;
+    const trackInventory = input.trackInventory ?? product.trackInventory;
+    return prisma.$transaction(async (tx) => {
+      if (stockDelta && trackInventory) {
+        const warehouse = await getDefaultWarehouse(tx, organizationId);
+        if (warehouse) {
+          await inventoryEngine.recordStockMovement(tx, {
+            organizationId, productId: id, warehouseId: warehouse.id,
+            movementType: stockDelta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
+            quantity: stockDelta, rate: Number(input.purchasePrice ?? product.costPrice ?? 0),
+            referenceType: 'PRODUCT_EDIT', referenceId: id, notes: 'Stock changed from product form',
+          });
+        }
+      }
+      return tx.product.update({
       where: { id },
       data: {
         name: input.name,
-        sku: input.sku || null,
+        ...(input.sku !== undefined && { sku: input.sku || null }),
         description: input.description,
         hsnCode: input.hsnCode,
         type: input.type as any,
@@ -114,6 +138,7 @@ export class ProductService {
         reorderPoint: input.reorderLevel,
         attributes: input.attributes as Prisma.InputJsonValue,
       },
+    });
     });
   }
 

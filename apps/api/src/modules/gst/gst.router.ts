@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { Request, Response } from 'express';
 import { prisma } from '../../infrastructure/database';
-import { successResponse } from '../../shared/helpers/response.helper';
+import { successResponse, roundTo } from '../../shared/helpers/response.helper';
 import { authMiddleware } from '../../shared/middleware/auth.middleware';
 import { tenantMiddleware } from '../../shared/middleware/tenant';
-import { GSTEngine } from './gst.engine';
+import { GSTEngine, noteTaxAdjustments } from './gst.engine';
 
 const gstEngine = new GSTEngine();
 const router = Router();
@@ -54,7 +54,7 @@ router.get('/reports/gstr2', async (req: Request, res: Response) => {
   const from = new Date(+year, +month - 1, 1);
   const to = new Date(+year, +month, 0, 23, 59, 59);
   const purchases = await prisma.purchase.findMany({
-    where: { organizationId: req.organizationId!, purchaseDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+    where: { organizationId: req.organizationId!, purchaseDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
     include: { supplier: { select: { name: true, gstin: true } }, items: true },
   });
   res.json(successResponse({ month: +month, year: +year, purchases }));
@@ -78,22 +78,27 @@ router.get('/reports/gst-summary', async (req: Request, res: Response) => {
 
   const [salesGST, purchaseGST] = await Promise.all([
     prisma.invoice.aggregate({
-      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
       _sum: { cgstAmount: true, sgstAmount: true, igstAmount: true, taxAmount: true, taxableAmount: true, totalAmount: true },
     }),
     prisma.purchase.aggregate({
-      where: { organizationId: req.organizationId!, purchaseDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+      where: { organizationId: req.organizationId!, purchaseDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
       _sum: { cgstAmount: true, sgstAmount: true, igstAmount: true, taxAmount: true, taxableAmount: true, totalAmount: true },
     }),
   ]);
 
-  const outputGST = Number(salesGST._sum.taxAmount || 0);
-  const inputGST = Number(purchaseGST._sum.taxAmount || 0);
+  // Returns in the period reduce the tax: credit notes cut output tax, debit notes cut input credit.
+  const { creditNotes, debitNotes } = await noteTaxAdjustments(req.organizationId!, from, to);
+  const sub = (v: unknown, minus: number) => roundTo(Number(v || 0) - minus);
+  const outputGST = sub(salesGST._sum.taxAmount, creditNotes.total);
+  const inputGST = sub(purchaseGST._sum.taxAmount, debitNotes.total);
 
   res.json(successResponse({
-    outputTax: { cgst: salesGST._sum.cgstAmount, sgst: salesGST._sum.sgstAmount, igst: salesGST._sum.igstAmount, total: outputGST },
-    inputTax: { cgst: purchaseGST._sum.cgstAmount, sgst: purchaseGST._sum.sgstAmount, igst: purchaseGST._sum.igstAmount, total: inputGST },
-    netGSTPayable: outputGST - inputGST,
+    outputTax: { cgst: sub(salesGST._sum.cgstAmount, creditNotes.cgst), sgst: sub(salesGST._sum.sgstAmount, creditNotes.sgst), igst: sub(salesGST._sum.igstAmount, creditNotes.igst), total: outputGST },
+    inputTax: { cgst: sub(purchaseGST._sum.cgstAmount, debitNotes.cgst), sgst: sub(purchaseGST._sum.sgstAmount, debitNotes.sgst), igst: sub(purchaseGST._sum.igstAmount, debitNotes.igst), total: inputGST },
+    creditNotes,
+    debitNotes,
+    netGSTPayable: roundTo(outputGST - inputGST),
     taxableAmount: salesGST._sum.taxableAmount,
     totalSales: salesGST._sum.totalAmount,
     totalPurchases: purchaseGST._sum.totalAmount,
@@ -108,22 +113,27 @@ router.get('/summary', async (req: Request, res: Response) => {
 
   const [salesGST, purchaseGST] = await Promise.all([
     prisma.invoice.aggregate({
-      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
       _sum: { cgstAmount: true, sgstAmount: true, igstAmount: true, taxAmount: true, taxableAmount: true, totalAmount: true },
     }),
     prisma.purchase.aggregate({
-      where: { organizationId: req.organizationId!, purchaseDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+      where: { organizationId: req.organizationId!, purchaseDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
       _sum: { cgstAmount: true, sgstAmount: true, igstAmount: true, taxAmount: true, taxableAmount: true, totalAmount: true },
     }),
   ]);
 
-  const outputGST = Number(salesGST._sum.taxAmount || 0);
-  const inputGST = Number(purchaseGST._sum.taxAmount || 0);
+  // Returns in the period reduce the tax: credit notes cut output tax, debit notes cut input credit.
+  const { creditNotes, debitNotes } = await noteTaxAdjustments(req.organizationId!, from, to);
+  const sub = (v: unknown, minus: number) => roundTo(Number(v || 0) - minus);
+  const outputGST = sub(salesGST._sum.taxAmount, creditNotes.total);
+  const inputGST = sub(purchaseGST._sum.taxAmount, debitNotes.total);
 
   res.json(successResponse({
-    outputTax: { cgst: salesGST._sum.cgstAmount, sgst: salesGST._sum.sgstAmount, igst: salesGST._sum.igstAmount, total: outputGST },
-    inputTax: { cgst: purchaseGST._sum.cgstAmount, sgst: purchaseGST._sum.sgstAmount, igst: purchaseGST._sum.igstAmount, total: inputGST },
-    netGSTPayable: outputGST - inputGST,
+    outputTax: { cgst: sub(salesGST._sum.cgstAmount, creditNotes.cgst), sgst: sub(salesGST._sum.sgstAmount, creditNotes.sgst), igst: sub(salesGST._sum.igstAmount, creditNotes.igst), total: outputGST },
+    inputTax: { cgst: sub(purchaseGST._sum.cgstAmount, debitNotes.cgst), sgst: sub(purchaseGST._sum.sgstAmount, debitNotes.sgst), igst: sub(purchaseGST._sum.igstAmount, debitNotes.igst), total: inputGST },
+    creditNotes,
+    debitNotes,
+    netGSTPayable: roundTo(outputGST - inputGST),
     taxableAmount: salesGST._sum.taxableAmount,
     totalSales: salesGST._sum.totalAmount,
     totalPurchases: purchaseGST._sum.totalAmount,

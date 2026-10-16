@@ -2,28 +2,44 @@ import { Request, Response } from 'express';
 import { inventoryService } from './inventory.service';
 import { successResponse } from '../../shared/helpers/response.helper';
 import { z } from 'zod';
+import { StockMovementType } from '@prisma/client';
+
+// Manual adjustments only. All are valid StockMovementType values; system movements (SALE, PURCHASE,
+// SALE_RETURN, PURCHASE_RETURN, TRANSFER_*, PRODUCTION_*) are written by their own modules.
+const ADJUSTMENT_TYPES = ['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'OPENING_STOCK', 'DAMAGE', 'EXPIRED'] as const;
 
 const AdjustStockSchema = z.object({
-  productId: z.string(),
-  warehouseId: z.string().optional(),
-  type: z.enum(['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'OPENING_STOCK', 'DAMAGE', 'EXPIRED', 'RETURN_IN', 'RETURN_OUT']),
-  quantity: z.number().positive(),
+  productId: z.string().min(1),
+  warehouseId: z.string().min(1).optional(),
+  type: z.enum(ADJUSTMENT_TYPES),
+  quantity: z.number().positive().finite(),
   unitCost: z.number().min(0).optional(),
   notes: z.string().optional(),
   referenceNumber: z.string().optional(),
 });
 
+const MovementQuerySchema = z.object({
+  productId: z.string().min(1).optional(),
+  warehouseId: z.string().min(1).optional(),
+  type: z.nativeEnum(StockMovementType).optional(),
+  fromDate: z.coerce.date().optional(),
+  toDate: z.coerce.date().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(2000).default(20),
+});
+
 const TransferStockSchema = z.object({
-  productId: z.string(),
-  fromWarehouseId: z.string(),
-  toWarehouseId: z.string(),
-  quantity: z.number().positive(),
+  productId: z.string().min(1),
+  fromWarehouseId: z.string().min(1),
+  toWarehouseId: z.string().min(1),
+  quantity: z.number().positive().finite(),
   notes: z.string().optional(),
 });
 
 export class InventoryController {
   getStockSummary = async (req: Request, res: Response) => {
-    const result = await inventoryService.getStockSummary(req.organizationId!, req.query.warehouseId as string);
+    const warehouseId = typeof req.query.warehouseId === 'string' && req.query.warehouseId ? req.query.warehouseId : undefined;
+    const result = await inventoryService.getStockSummary(req.organizationId!, warehouseId);
     res.json(successResponse({ products: result }));
   };
   adjustStock = async (req: Request, res: Response) => {
@@ -37,7 +53,9 @@ export class InventoryController {
     res.json(successResponse(result));
   };
   getMovements = async (req: Request, res: Response) => {
-    const query = { ...req.query, page: req.query.page ? +req.query.page : 1, limit: req.query.limit ? +req.query.limit : 20 } as any;
+    // empty-string params (e.g. ?type=) are treated as absent
+    const raw = Object.fromEntries(Object.entries(req.query).filter(([, v]) => v !== '' && v !== undefined));
+    const query = MovementQuerySchema.parse(raw);
     const result = await inventoryService.getStockMovements(req.organizationId!, query);
     res.json(successResponse({ movements: result.data, total: result.meta.total, page: result.meta.page, totalPages: result.meta.totalPages }));
   };

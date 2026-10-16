@@ -9,15 +9,17 @@ import { z } from 'zod';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { useAuthStore } from '@/store/auth.store';
+import { dropEmpty } from '@/lib/business';
 
 const RegisterSchema = z.object({
   firstName: z.string().min(1, 'First name required'),
   lastName: z.string().min(1, 'Last name required'),
   email: z.string().email('Invalid email'),
   phone: z.string().regex(/^[6-9]\d{9}$/, 'Enter valid 10-digit mobile').optional().or(z.literal('')),
-  password: z.string().min(8, 'Minimum 8 characters'),
+  // Same rule the API enforces, so people see it before they submit.
+  password: z.string().min(8, 'Use at least 8 characters')
+    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/, 'Add a capital letter, a small letter, a number and a symbol (@$!%*?&)'),
   organizationName: z.string().min(1, 'Business name required'),
-  gstin: z.string().optional(),
 });
 
 type RegisterForm = z.infer<typeof RegisterSchema>;
@@ -32,7 +34,8 @@ export default function RegisterPage() {
   const onSubmit = async (data: RegisterForm) => {
     setLoading(true);
     try {
-      const res = await api.auth.register(data);
+      // The API rejects '' for the optional phone, so leave blanks out.
+      const res = await api.auth.register(dropEmpty(data));
       const { user, organization, accessToken, refreshToken } = res.data.data;
       // Attach organization to user so setAuth can read it
       const userWithOrg = {
@@ -45,10 +48,12 @@ export default function RegisterPage() {
         }],
       };
       setAuth(userWithOrg, accessToken, refreshToken);
-      toast.success('Account created successfully!');
-      router.push('/auth/login');
+      toast.success('Welcome! Let’s set up your business.');
+      // setAuth has already signed them in; go straight to Home where the setup guide takes over.
+      router.push('/dashboard');
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'Registration failed');
+      const field = (err?.response?.data?.details ?? err?.response?.data?.errors)?.[0]?.field;
+      toast.error(field ? `Please check your ${field === 'phone' ? 'mobile number' : field}` : err?.response?.data?.message || 'Registration failed');
     } finally {
       setLoading(false);
     }
@@ -83,17 +88,13 @@ export default function RegisterPage() {
           {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mobile Number</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mobile number <span className="text-gray-400 font-normal">(optional)</span></label>
           <input {...register('phone')} type="tel" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="9876543210" />
           {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone.message}</p>}
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">GSTIN (optional)</label>
-          <input {...register('gstin')} className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none uppercase" placeholder="22AAAAA0000A1Z5" maxLength={15} />
-        </div>
-        <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password *</label>
-          <input {...register('password')} type="password" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="Min. 8 characters" />
+          <input {...register('password')} type="password" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="e.g. Shop@2026" />
           {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>}
         </div>
         <button type="submit" disabled={loading} className="w-full py-2.5 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-semibold rounded-lg transition">

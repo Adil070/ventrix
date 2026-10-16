@@ -3,6 +3,7 @@ import { cache } from '../../infrastructure/cache';
 import { NotFoundError, ConflictError, BadRequestError } from '../../shared/errors';
 import type { CreateCustomerInput, UpdateCustomerInput, CustomerQueryInput } from './customer.dto';
 import { Prisma } from '@prisma/client';
+import { paymentOrgScope } from '../payments/payment.service';
 
 export class CustomerService {
   // ─── Create Customer ──────────────────────────────────────────────────────────
@@ -98,10 +99,13 @@ export class CustomerService {
     const customer = await prisma.customer.findFirst({ where: { id: customerId, organizationId } });
     if (!customer) throw new NotFoundError('Customer not found');
 
+    // The DTO says `mobile` but the column is `phone`, and customerType has no column; same mapping as create.
+    const { mobile, customerType: _customerType, ...rest } = input as any;
     const updated = await prisma.customer.update({
       where: { id: customerId },
       data: {
-        ...input,
+        ...rest,
+        ...(mobile !== undefined && { phone: mobile }),
         billingAddress: input.billingAddress as Prisma.InputJsonValue,
         shippingAddress: input.shippingAddress as Prisma.InputJsonValue,
         gstin: input.gstin || null,
@@ -151,7 +155,7 @@ export class CustomerService {
     });
 
     const payments = await prisma.payment.findMany({
-      where: { customerId, organizationId },
+      where: { customerId, ...paymentOrgScope(organizationId) },
       orderBy: { paymentDate: 'asc' },
       select: {
         id: true,

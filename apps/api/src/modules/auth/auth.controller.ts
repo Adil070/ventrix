@@ -64,8 +64,7 @@ export class AuthController {
   }
 
   async logout(req: Request, res: Response): Promise<void> {
-    const { refreshToken } = req.body;
-    await authService.logout(refreshToken, req.user!.userId);
+    await authService.logout(req.body?.refreshToken, req.user?.userId);
     res.json(successResponse(null, 'Logged out successfully'));
   }
 

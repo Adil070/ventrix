@@ -19,7 +19,7 @@ export class GSTReportsService {
     const invoices = await prisma.invoice.findMany({
       where: {
         organizationId,
-        status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+        status: { notIn: ['DRAFT', 'CANCELLED'] },
         invoiceDate: { gte: fromDate, lte: toDate }
       },
       include: {
@@ -169,7 +169,7 @@ export class GSTReportsService {
     const purchases = await prisma.purchase.findMany({
       where: {
         organizationId,
-        status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+        status: { notIn: ['DRAFT', 'CANCELLED'] },
         purchaseDate: { gte: fromDate, lte: toDate }
       },
       include: {
@@ -265,7 +265,7 @@ export class GSTReportsService {
     const salesTotals = await prisma.invoice.aggregate({
       where: {
         organizationId,
-        status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+        status: { notIn: ['DRAFT', 'CANCELLED'] },
         invoiceDate: { gte: fromDate, lte: toDate }
       },
       _sum: {
@@ -282,7 +282,7 @@ export class GSTReportsService {
     const purchaseTotals = await prisma.purchase.aggregate({
       where: {
         organizationId,
-        status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+        status: { notIn: ['DRAFT', 'CANCELLED'] },
         purchaseDate: { gte: fromDate, lte: toDate }
       },
       _sum: {
@@ -361,7 +361,7 @@ export class GSTReportsService {
         where: {
           invoice: {
             organizationId,
-            status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+            status: { notIn: ['DRAFT', 'CANCELLED'] },
             invoiceDate: { gte: fromDate, lte: toDate }
           }
         },
@@ -374,7 +374,7 @@ export class GSTReportsService {
         where: {
           purchase: {
             organizationId,
-            status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+            status: { notIn: ['DRAFT', 'CANCELLED'] },
             purchaseDate: { gte: fromDate, lte: toDate }
           }
         },

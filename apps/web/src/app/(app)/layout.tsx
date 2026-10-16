@@ -1,18 +1,17 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth.store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
-import { useUIStore } from '@/store/ui.store';
-import { cn } from '@/lib/utils';
+import { CommandPalette } from '@/components/layout/CommandPalette';
 import { motion } from '@/components/ui/motion';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, _hasHydrated } = useAuthStore();
-  const { sidebarOpen } = useUIStore();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (!_hasHydrated) return;
@@ -23,20 +22,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated) return null;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
+    // overflow-clip (not just hidden): a hidden box can still be scrolled by focus() or scrollIntoView,
+    // which shifts the whole shell and pushes the header off screen. Only <main> should scroll.
+    <div className="flex h-screen overflow-hidden overflow-clip bg-gray-50 dark:bg-gray-900">
       <Sidebar />
-      <div className={cn('flex flex-col flex-1 min-w-0 transition-all duration-300', sidebarOpen ? 'ml-0' : 'ml-0')}>
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden overflow-clip transition-all duration-300">
         <Header />
         <motion.main
-          key={typeof window !== 'undefined' ? window.location.pathname : ''}
+          key={pathname}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
           className="flex-1 overflow-y-auto p-4 md:p-6"
         >
-          {children}
+          {/* Pages read ?new=… via useSearchParams, which needs a Suspense boundary. */}
+          <Suspense fallback={null}>{children}</Suspense>
         </motion.main>
       </div>
+      <CommandPalette />
     </div>
   );
 }

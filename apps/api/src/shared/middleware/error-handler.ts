@@ -1,7 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { logger } from '../../infrastructure/logger';
+import { Prisma } from '@prisma/client';
 import { AppError } from '../errors';
+
+// body-parser / multer / http-errors style errors carry a 4xx status of their own.
+function clientStatus(err: any): number | undefined {
+  const status = Number(err?.status ?? err?.statusCode);
+  return status >= 400 && status < 500 ? status : undefined;
+}
 
 export function errorHandler(
   err: Error,
@@ -34,8 +41,50 @@ export function errorHandler(
     return;
   }
 
+  // Malformed JSON body (rejected by express.json before any route runs)
+  if ((err as any).type === 'entity.parse.failed') {
+    res.status(400).json({
+      success: false,
+      message: 'Malformed JSON in request body',
+      code: 'INVALID_JSON',
+    });
+    return;
+  }
+
+  // Upload errors (e.g. file too large)
+  if (err.name === 'MulterError') {
+    const tooLarge = (err as any).code === 'LIMIT_FILE_SIZE';
+    res.status(tooLarge ? 413 : 400).json({
+      success: false,
+      message: err.message,
+      code: tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_ERROR',
+    });
+    return;
+  }
+
+  // Other body-parser / http errors with a client status (payload too large, bad encoding, ...)
+  const status = clientStatus(err);
+  if (status) {
+    res.status(status).json({
+      success: false,
+      message: (err as any).expose === false ? 'Bad request' : err.message,
+      code: 'BAD_REQUEST',
+    });
+    return;
+  }
+
+  // Prisma: a query built from bad input (wrong type, unknown enum value, ...)
+  if (err instanceof Prisma.PrismaClientValidationError || err.constructor.name === 'PrismaClientValidationError') {
+    res.status(400).json({
+      success: false,
+      message: 'Invalid request data',
+      code: 'INVALID_DATA',
+    });
+    return;
+  }
+
   // Prisma errors
-  if (err.constructor.name === 'PrismaClientKnownRequestError') {
+  if (err instanceof Prisma.PrismaClientKnownRequestError || err.constructor.name === 'PrismaClientKnownRequestError') {
     const prismaErr = err as any;
 
     if (prismaErr.code === 'P2002') {
@@ -44,6 +93,15 @@ export function errorHandler(
         message: 'A record with this data already exists',
         code: 'DUPLICATE_ENTRY',
         field: prismaErr.meta?.target,
+      });
+      return;
+    }
+
+    if (prismaErr.code === 'P2003') {
+      res.status(400).json({
+        success: false,
+        message: 'A referenced record does not exist',
+        code: 'INVALID_REFERENCE',
       });
       return;
     }
@@ -83,13 +141,11 @@ export function errorHandler(
     'Unexpected server error'
   );
 
+  // Stack traces only ever leave the server in local development.
   res.status(500).json({
     success: false,
     message: 'An unexpected error occurred',
     code: 'INTERNAL_SERVER_ERROR',
-    ...(process.env.NODE_ENV === 'development' && {
-      stack: err.stack,
-      original: err.message,
-    }),
+    ...(process.env.NODE_ENV === 'development' ? { stack: err.stack, original: err.message } : {}),
   });
 }

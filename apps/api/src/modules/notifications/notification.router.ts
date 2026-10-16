@@ -4,6 +4,7 @@ import { prisma } from '../../infrastructure/database';
 import { successResponse } from '../../shared/helpers/response.helper';
 import { authMiddleware } from '../../shared/middleware/auth.middleware';
 import { tenantMiddleware } from '../../shared/middleware/tenant';
+import { NotFoundError } from '../../shared/errors';
 
 const router = Router();
 router.use(authMiddleware, tenantMiddleware);
@@ -23,8 +24,12 @@ router.get('/', async (req: Request, res: Response) => {
   res.json(successResponse({ notifications: data, unreadCount, total }));
 });
 
+// A notification can only be touched by the user it was sent to, inside the selected organization.
+const ownNotification = (req: Request) => ({ id: req.params.id, userId: req.userId!, organizationId: req.organizationId! });
+
 router.post('/:id/read', async (req: Request, res: Response) => {
-  await prisma.notification.update({ where: { id: req.params.id }, data: { isRead: true, readAt: new Date() } });
+  const { count } = await prisma.notification.updateMany({ where: ownNotification(req), data: { isRead: true, readAt: new Date() } });
+  if (!count) throw new NotFoundError('Notification', req.params.id);
   res.json(successResponse({ message: 'Marked as read' }));
 });
 
@@ -34,7 +39,8 @@ router.post('/read-all', async (req: Request, res: Response) => {
 });
 
 router.delete('/:id', async (req: Request, res: Response) => {
-  await prisma.notification.delete({ where: { id: req.params.id } });
+  const { count } = await prisma.notification.deleteMany({ where: ownNotification(req) });
+  if (!count) throw new NotFoundError('Notification', req.params.id);
   res.json(successResponse({ message: 'Notification deleted' }));
 });
 

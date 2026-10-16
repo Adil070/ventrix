@@ -1,6 +1,66 @@
 import { prisma } from '../../infrastructure/database';
 import { toDecimal, roundTo } from '../../shared/helpers/response.helper';
-import { NotFoundError } from '../../shared/errors';
+import { NotFoundError, BadRequestError } from '../../shared/errors';
+import { Prisma } from '@prisma/client';
+
+/**
+ * Stock sign convention (single source of truth):
+ *   every StockEntry.quantity is SIGNED — incoming movements are positive, outgoing movements are negative.
+ * Per-warehouse stock is therefore SUM(quantity) over the warehouse's entries, and the sum across all
+ * warehouses equals product.openingStock (the running total).
+ */
+export const OUT_MOVEMENT_TYPES = ['SALE', 'PURCHASE_RETURN', 'ADJUSTMENT_OUT', 'TRANSFER_OUT', 'PRODUCTION_OUT', 'DAMAGE', 'EXPIRED'] as const;
+export const IN_MOVEMENT_TYPES = ['PURCHASE', 'SALE_RETURN', 'ADJUSTMENT_IN', 'TRANSFER_IN', 'OPENING_STOCK', 'PRODUCTION_IN'] as const;
+
+export function isOutMovement(movementType: string): boolean {
+  return (OUT_MOVEMENT_TYPES as readonly string[]).includes(movementType);
+}
+
+/** Returns the quantity with the sign implied by the movement type (out → negative, in → positive). */
+export function signedQuantity(movementType: string, quantity: number): number {
+  const abs = Math.abs(Number(quantity));
+  return isOutMovement(movementType) ? -abs : abs;
+}
+
+type Db = Prisma.TransactionClient | typeof prisma;
+
+/** Net stock of a product in one warehouse, from its signed stock entries. */
+export async function getWarehouseProductStock(db: Db, organizationId: string, productId: string, warehouseId: string): Promise<number> {
+  const agg = await db.stockEntry.aggregate({
+    // scope through the warehouse relation: some legacy entries have a NULL organizationId
+    where: { productId, warehouseId, warehouse: { organizationId } },
+    _sum: { quantity: true },
+  });
+  return toDecimal(agg._sum.quantity);
+}
+
+/** Row-locks products for the rest of the transaction so concurrent stock checks serialise. */
+export async function lockProducts(tx: Prisma.TransactionClient, productIds: string[]): Promise<void> {
+  const ids = Array.from(new Set(productIds)).sort();
+  if (!ids.length) return;
+  await tx.$queryRaw`SELECT id FROM products WHERE id IN (${Prisma.join(ids)}) FOR UPDATE`;
+}
+
+/** Default warehouse for an org: active, isDefault first, then oldest. */
+export async function getDefaultWarehouse(db: Db, organizationId: string) {
+  return db.warehouse.findFirst({
+    where: { organizationId, isActive: true },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+  });
+}
+
+/** Resolves an org-owned, active warehouse (explicit id or the default); throws 400/404 otherwise. */
+export async function resolveWarehouse(db: Db, organizationId: string, warehouseId?: string | null) {
+  if (warehouseId) {
+    const wh = await db.warehouse.findFirst({ where: { id: warehouseId, organizationId } });
+    if (!wh) throw new NotFoundError('Warehouse', warehouseId);
+    if (!wh.isActive) throw new BadRequestError(`Warehouse '${wh.name}' is inactive`);
+    return wh;
+  }
+  const wh = await getDefaultWarehouse(db, organizationId);
+  if (!wh) throw new BadRequestError('No active warehouse configured. Create a warehouse first.');
+  return wh;
+}
 
 interface StockMovement {
   organizationId: string;
@@ -25,8 +85,11 @@ interface StockMovement {
  */
 export class InventoryEngine {
   // ─── Record Stock Movement ────────────────────────────────────────────────────
+  // Quantity is normalised to the sign convention above, so callers may pass either sign
+  // (sales already pass negative, purchases positive).
   async recordStockMovement(tx: any, movement: StockMovement): Promise<void> {
-    const amount = roundTo(Math.abs(movement.quantity) * movement.rate);
+    const quantity = signedQuantity(movement.movementType, movement.quantity);
+    const amount = roundTo(Math.abs(quantity) * movement.rate);
 
     await tx.stockEntry.create({
       data: {
@@ -38,7 +101,7 @@ export class InventoryEngine {
         batchLotId: movement.batchLotId,
         serialNumber: movement.serialNumber,
         movementType: movement.movementType as any,
-        quantity: movement.quantity,
+        quantity,
         rate: movement.rate,
         amount,
         referenceType: movement.referenceType,

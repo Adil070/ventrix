@@ -19,7 +19,7 @@ export class PurchaseController {
     res.json(successResponse(purchase));
   };
   cancel = async (req: Request, res: Response) => {
-    const result = await purchaseService.cancelPurchase(req.organizationId!, req.params.id, req.userId!);
+    const result = await purchaseService.cancelPurchase(req.organizationId!, req.params.id, req.userId!, typeof req.body?.reason === 'string' ? req.body.reason : undefined);
     res.json(successResponse(result));
   };
 }

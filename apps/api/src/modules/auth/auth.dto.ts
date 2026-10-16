@@ -40,6 +40,11 @@ export const RefreshTokenDto = z.object({
   refreshToken: z.string(),
 });
 
+// The web sends whatever refresh token it holds (possibly none); logout must not fail because of it.
+export const LogoutDto = z.object({
+  refreshToken: z.string().nullish(),
+});
+
 export const ForgotPasswordDto = z.object({
   email: z.string().email(),
 });

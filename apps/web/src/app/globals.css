@@ -91,4 +91,7 @@
   .no-print { display: none !important; }
   .print-only { display: block !important; }
   body { background: white; }
+  /* The app shell scrolls inside a fixed-height frame; let printed pages flow instead. */
+  .h-screen { height: auto !important; overflow: visible !important; }
+  main { overflow: visible !important; padding: 0 !important; }
 }

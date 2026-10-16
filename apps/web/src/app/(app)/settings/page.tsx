@@ -7,10 +7,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
-import { formatCurrency, formatDate } from '@/lib/utils';
-import { useAuthStore } from '@/store/auth.store';
+import { useSearchParams } from 'next/navigation';
+import { dropEmpty } from '@/lib/business';
+import { useOrgSettings } from '@/hooks/useOrganization';
+import { ExperiencePicker } from '@/components/home/HomeDashboard';
 import { PageHeader, Button, Card, StatusBadge } from '@/components/shared';
-import { Building2, Users, Bell, Lock, CreditCard, Globe, ChevronRight } from 'lucide-react';
+import { Building2, Users, Lock, SlidersHorizontal } from 'lucide-react';
 
 const OrgSchema = z.object({
   name: z.string().min(1),
@@ -27,55 +29,69 @@ const OrgSchema = z.object({
 });
 
 type OrgForm = z.infer<typeof OrgSchema>;
+type Tab = 'organization' | 'experience' | 'members' | 'security';
+const TABS: Tab[] = ['organization', 'experience', 'members', 'security'];
+
+// The API returns null for empty fields; the form needs strings.
+function toFormValues(org: any): OrgForm | undefined {
+  if (!org) return undefined;
+  const a = org.address || {};
+  return {
+    name: org.name ?? '', gstin: org.gstin ?? '', pan: org.pan ?? '', cin: org.cin ?? '',
+    email: org.email ?? '', phone: org.phone ?? '', website: org.website ?? '',
+    address: { line1: a.line1 ?? '', city: a.city ?? '', state: a.state ?? '', pincode: a.pincode ?? '' },
+    invoicePrefix: org.invoicePrefix ?? 'INV', currency: org.currency ?? 'INR', timezone: org.timezone ?? 'Asia/Kolkata',
+  };
+}
 
 const PasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8),
+  // Same rule the API enforces for every password.
+  newPassword: z.string().min(8, 'Use at least 8 characters')
+    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/, 'Add a capital letter, a small letter, a number and a symbol (@$!%*?&)'),
   confirmPassword: z.string(),
 }).refine(d => d.newPassword === d.confirmPassword, { message: 'Passwords do not match', path: ['confirmPassword'] });
 
 export default function SettingsPage() {
-  const { user, updateUser } = useAuthStore();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<'organization' | 'profile' | 'members' | 'security'>('organization');
-
-  const { data: org } = useQuery({ queryKey: ['organization'], queryFn: () => api.organization.get(), select: r => r.data.data });
+  const requested = useSearchParams().get('tab') as Tab | null;
+  const [tab, setTab] = useState<Tab>(requested && TABS.includes(requested) ? requested : 'organization');
+  const { org, experience, hasChosenExperience, updateSettings, isSaving } = useOrgSettings();
   const { data: members } = useQuery({ queryKey: ['org-members'], queryFn: () => api.users.getOrgMembers(), select: r => r.data.data, enabled: tab === 'members' });
 
-  const { register: regOrg, handleSubmit: handleOrg, reset: resetOrg } = useForm<OrgForm>({ resolver: zodResolver(OrgSchema), values: org });
+  const { register: regOrg, handleSubmit: handleOrg, reset: resetOrg } = useForm<OrgForm>({ resolver: zodResolver(OrgSchema), values: toFormValues(org) });
   const { register: regPwd, handleSubmit: handlePwd, reset: resetPwd, formState: { errors: pwdErrors } } = useForm<z.infer<typeof PasswordSchema>>({ resolver: zodResolver(PasswordSchema) });
 
   const updateOrgMut = useMutation({
-    mutationFn: (d: OrgForm) => api.organization.update(d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['organization'] }); toast.success('Organization updated'); },
+    mutationFn: (d: OrgForm) => api.organization.update(dropEmpty({ ...d, gstin: d.gstin?.toUpperCase(), pan: d.pan?.toUpperCase() })),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['organization'] }); toast.success('Business details saved'); },
     onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
   });
 
   const changePwdMut = useMutation({
     mutationFn: (d: any) => api.users.changePassword(d),
-    onSuccess: () => { toast.success('Password changed!'); resetPwd(); },
+    onSuccess: () => { toast.success('Password changed. Other devices have been signed out.'); resetPwd(); },
     onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
   });
 
   const settingsTabs = [
-    { key: 'organization', label: 'Organization', icon: Building2 },
-    { key: 'profile', label: 'Profile', icon: Users },
-    { key: 'members', label: 'Team Members', icon: Users },
-    { key: 'security', label: 'Security', icon: Lock },
+    { key: 'organization', label: 'Business details', icon: Building2 },
+    { key: 'experience', label: 'App setup', icon: SlidersHorizontal },
+    { key: 'members', label: 'Team', icon: Users },
+    { key: 'security', label: 'Password', icon: Lock },
   ];
 
   const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none";
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" subtitle="Manage your organization and account settings" />
+      <PageHeader title="Settings" subtitle="Set these up once. You rarely need to come back here." />
 
-      <div className="flex gap-6">
-        {/* Sidebar */}
-        <div className="w-48 flex-shrink-0">
-          <nav className="space-y-1">
+      <div className="flex flex-col md:flex-row gap-6">
+        <div className="md:w-48 flex-shrink-0">
+          <nav className="flex md:flex-col gap-1 overflow-x-auto">
             {settingsTabs.map(t => (
-              <button key={t.key} onClick={() => setTab(t.key as any)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${tab === t.key ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
+              <button key={t.key} onClick={() => setTab(t.key as Tab)} className={`md:w-full whitespace-nowrap flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${tab === t.key ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
                 <t.icon className="w-4 h-4" />{t.label}
               </button>
             ))}
@@ -83,10 +99,28 @@ export default function SettingsPage() {
         </div>
 
         {/* Content */}
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
+          {tab === 'experience' && (
+            <Card className="p-6 space-y-4">
+              <div>
+                <h3 className="font-semibold text-gray-900 dark:text-white text-lg">How do you run your business?</h3>
+                <p className="text-sm text-gray-500">This decides which tools show in the menu. Nothing is deleted. Hidden tools stay under “More tools” and in search (Ctrl+K).</p>
+              </div>
+              <ExperiencePicker
+                current={hasChosenExperience ? experience : undefined}
+                saving={isSaving}
+                onPick={async e => {
+                  try { await updateSettings({ experience: e }); toast.success('Menu updated'); }
+                  catch { toast.error('Could not save. Please try again.'); }
+                }}
+              />
+            </Card>
+          )}
+
           {tab === 'organization' && (
             <Card className="p-6">
-              <h3 className="font-semibold text-gray-900 dark:text-white text-lg mb-5">Organization Details</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white text-lg">Business details</h3>
+              <p className="text-sm text-gray-500 mb-5">These appear on your bills. Fill in what you have; everything except the name is optional.</p>
               <form onSubmit={handleOrg(d => updateOrgMut.mutate(d))} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Business Name *</label><input {...regOrg('name')} className={inputCls} /></div>

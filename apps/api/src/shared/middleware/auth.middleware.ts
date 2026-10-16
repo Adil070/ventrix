@@ -85,6 +85,20 @@ export async function authenticate(
   }
 }
 
+// Attach the user when a valid token is sent, but let the request through without one.
+export async function optionalAuthenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
+  if (!req.headers.authorization?.startsWith('Bearer ')) return next();
+  try {
+    await authenticate(req, res, () => undefined);
+  } catch {
+    req.user = undefined;
+    req.userId = undefined;
+    req.organizationId = undefined;
+    req.branchId = undefined;
+  }
+  next();
+}
+
 // Alias for backward compatibility with older routers
 export const authMiddleware = authenticate;
 

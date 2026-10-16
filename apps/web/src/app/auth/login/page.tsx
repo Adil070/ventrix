@@ -23,7 +23,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [showOTP, setShowOTP] = useState(false);
   const [otp, setOtp] = useState('');
-  const [phoneOrEmail, setPhoneOrEmail] = useState('');
+  // OTP is emailed only: the API accepts type EMAIL | SMS, but nothing sends SMS codes yet.
+  const [otpEmail, setOtpEmail] = useState('');
 
   const { register, handleSubmit, formState: { errors } } = useForm<LoginForm>({
     resolver: zodResolver(LoginSchema),
@@ -45,12 +46,13 @@ export default function LoginPage() {
   };
 
   const sendOTP = async () => {
-    if (!phoneOrEmail) return toast.error('Enter phone or email');
+    const identifier = otpEmail.trim();
+    if (!z.string().email().safeParse(identifier).success) return toast.error('Enter the email address of your account');
     setLoading(true);
     try {
-      await api.auth.sendOTP({ identifier: phoneOrEmail, type: 'LOGIN' });
+      await api.auth.sendOTP({ identifier, type: 'EMAIL' });
       setShowOTP(true);
-      toast.success('OTP sent!');
+      toast.success(`OTP sent to ${identifier}`);
     } catch (err: any) {
       toast.error(err?.response?.data?.message || 'Failed to send OTP');
     } finally {
@@ -59,9 +61,11 @@ export default function LoginPage() {
   };
 
   const loginWithOTP = async () => {
+    const code = otp.trim();
+    if (!/^\d{6}$/.test(code)) return toast.error('Enter the 6-digit OTP');
     setLoading(true);
     try {
-      const res = await api.auth.loginWithOTP({ identifier: phoneOrEmail, otp });
+      const res = await api.auth.loginWithOTP({ identifier: otpEmail.trim(), otp: code });
       const { user, accessToken, refreshToken } = res.data.data;
       setAuth(user, accessToken, refreshToken);
       toast.success(`Welcome, ${user.firstName}!`);
@@ -103,9 +107,9 @@ export default function LoginPage() {
       </div>
 
       <div className="space-y-3">
-        <input value={phoneOrEmail} onChange={e => setPhoneOrEmail(e.target.value)} type="text" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="Mobile number or email" />
+        <input value={otpEmail} onChange={e => { setOtpEmail(e.target.value); setShowOTP(false); setOtp(''); }} type="email" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="Email address" />
         {showOTP && (
-          <input value={otp} onChange={e => setOtp(e.target.value)} type="text" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="Enter 6-digit OTP" maxLength={6} />
+          <input value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ''))} type="text" inputMode="numeric" autoComplete="one-time-code" className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none" placeholder="Enter 6-digit OTP" maxLength={6} />
         )}
         <button onClick={showOTP ? loginWithOTP : sendOTP} disabled={loading} className="w-full py-2.5 border-2 border-orange-500 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-semibold rounded-lg transition disabled:opacity-50">
           {showOTP ? 'Verify OTP' : 'Send OTP'}

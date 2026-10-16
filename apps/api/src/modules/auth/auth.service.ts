@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../../infrastructure/database';
-import { cache, CacheService } from '../../infrastructure/cache';
+import { cache, CacheService, redis } from '../../infrastructure/cache';
 import { config } from '../../config';
 import { jobs } from '../../infrastructure/queues';
 import {
@@ -21,11 +21,23 @@ import {
   NotFoundError,
 } from '../../shared/errors';
 import { logger } from '../../infrastructure/logger';
+import { z } from 'zod';
 
 const BCRYPT_ROUNDS = 12;
 const OTP_EXPIRY_MINUTES = 10;
 const EMAIL_VERIFY_EXPIRY_HOURS = 24;
 const PASSWORD_RESET_EXPIRY_HOURS = 1;
+
+// Same shape password login returns: the newest active membership with its organization,
+// so the web app can store the organization (name, logo, ...) whichever way the user signed in.
+const ACTIVE_ORG_INCLUDE = {
+  organizations: {
+    where: { isActive: true },
+    include: { organization: true },
+    take: 1,
+    orderBy: { joinedAt: 'desc' as const },
+  },
+};
 
 export class AuthService {
   // ─── Register ────────────────────────────────────────────────────────────────
@@ -76,6 +88,17 @@ export class AuthService {
         },
       });
 
+      // Sales and purchases only move stock when a warehouse exists, so every business starts with one.
+      await tx.warehouse.create({
+        data: {
+          organizationId: org.id,
+          branchId: branch.id,
+          name: 'Main store',
+          code: 'MAIN',
+          isDefault: true,
+        },
+      });
+
       // Create default chart of accounts
       await this.createDefaultAccounts(tx, org.id);
 
@@ -122,14 +145,7 @@ export class AuthService {
   async login(input: LoginInput, ipAddress?: string) {
     const user = await prisma.user.findUnique({
       where: { email: input.email },
-      include: {
-        organizations: {
-          where: { isActive: true },
-          include: { organization: true },
-          take: 1,
-          orderBy: { joinedAt: 'desc' },
-        },
-      },
+      include: ACTIVE_ORG_INCLUDE,
     });
 
     if (!user) {
@@ -192,7 +208,15 @@ export class AuthService {
 
   // ─── OTP Login ───────────────────────────────────────────────────────────────
   async sendOTP(input: SendOTPInput) {
-    const identifier = input.identifier;
+    // No SMS provider is integrated, so an SMS code would never arrive. Say so instead of pretending.
+    if (input.type !== 'EMAIL') {
+      throw new BadRequestError('SMS OTP is not available. Request the OTP by email instead.');
+    }
+
+    const identifier = input.identifier.trim().toLowerCase();
+    if (!z.string().email().safeParse(identifier).success) {
+      throw new BadRequestError('Enter a valid email address to receive the OTP');
+    }
     const code = this.generateOTP();
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
@@ -206,17 +230,14 @@ export class AuthService {
       },
     });
 
-    // Send via appropriate channel
-    if (input.type === 'EMAIL') {
-      await jobs.sendEmail({
-        type: 'otp',
-        to: identifier,
-        data: {
-          otp: code,
-          expiresIn: `${OTP_EXPIRY_MINUTES} minutes`,
-        },
-      });
-    }
+    await jobs.sendEmail({
+      type: 'otp',
+      to: identifier,
+      data: {
+        otp: code,
+        expiresIn: `${OTP_EXPIRY_MINUTES} minutes`,
+      },
+    });
 
     logger.info({ identifier, type: input.type }, 'OTP sent');
 
@@ -224,9 +245,10 @@ export class AuthService {
   }
 
   async verifyOTPLogin(input: OTPLoginInput) {
+    const identifier = input.identifier.trim().toLowerCase();
     const otpRecord = await prisma.oTPCode.findFirst({
       where: {
-        identifier: input.identifier,
+        identifier,
         isUsed: false,
         expiresAt: { gt: new Date() },
         attempts: { lt: 5 },
@@ -254,17 +276,23 @@ export class AuthService {
       data: { isUsed: true },
     });
 
-    // Find or create user
-    let user = await prisma.user.findFirst({
-      where: {
-        OR: [{ email: input.identifier }, { phone: input.identifier }],
-      },
-      include: { organizations: { where: { isActive: true }, take: 1 } },
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: identifier, mode: 'insensitive' } },
+      include: ACTIVE_ORG_INCLUDE,
     });
 
     if (!user) {
-      throw new NotFoundError('User', input.identifier);
+      throw new NotFoundError('User', identifier);
     }
+
+    if (!user.isActive) {
+      throw new UnauthorizedError('Your account has been deactivated');
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
 
     const userOrg = user.organizations[0];
     const tokens = await this.generateTokens(
@@ -273,8 +301,10 @@ export class AuthService {
       userOrg?.role || 'STAFF'
     );
 
+    // Same response shape as password login.
     return {
       user: this.sanitizeUser(user),
+      organization: userOrg?.organization,
       ...tokens,
     };
   }
@@ -305,14 +335,22 @@ export class AuthService {
   }
 
   // ─── Logout ───────────────────────────────────────────────────────────────────
-  async logout(refreshToken: string, userId: string) {
-    await prisma.refreshToken.updateMany({
-      where: { token: refreshToken, userId },
-      data: { isRevoked: true },
-    });
+  // Holding the refresh token is enough to revoke it, so this also works once the access token has expired.
+  // A missing or unknown token is not an error: the user is signing out either way.
+  async logout(refreshToken?: string | null, userId?: string) {
+    if (refreshToken) {
+      const stored = await prisma.refreshToken.findUnique({
+        where: { token: refreshToken },
+        select: { id: true, userId: true },
+      });
+      // With a valid access token, only that user's own refresh token can be revoked.
+      if (stored && (!userId || stored.userId === userId)) {
+        await prisma.refreshToken.update({ where: { id: stored.id }, data: { isRevoked: true } });
+        userId = userId ?? stored.userId;
+      }
+    }
 
-    // Invalidate user cache
-    await cache.del(CacheService.keys.user(userId));
+    if (userId) await cache.del(CacheService.keys.user(userId));
   }
 
   // ─── Forgot Password ──────────────────────────────────────────────────────────
@@ -322,19 +360,25 @@ export class AuthService {
     // Always return success to prevent email enumeration
     if (!user) return { message: 'If this email exists, a reset link has been sent' };
 
+    // Only the newest link works: issuing a new one retires the previous one.
+    const userKey = `reset:password:user:${user.id}`;
+    const previous = await cache.get<string>(userKey);
+    if (previous) await cache.del(`reset:password:${previous}`);
+
     const resetToken = this.generateSecureToken();
     await cache.set(
       `reset:password:${resetToken}`,
       user.id,
       PASSWORD_RESET_EXPIRY_HOURS * 3600
     );
+    await cache.set(userKey, resetToken, PASSWORD_RESET_EXPIRY_HOURS * 3600);
 
     await jobs.sendEmail({
       type: 'password-reset',
       to: user.email,
       data: {
         name: user.firstName,
-        resetUrl: `${config.APP_URL}/reset-password?token=${resetToken}`,
+        resetUrl: `${config.APP_URL}/auth/reset-password?token=${resetToken}`,
       },
     });
 
@@ -343,10 +387,14 @@ export class AuthService {
 
   // ─── Reset Password ───────────────────────────────────────────────────────────
   async resetPassword(input: ResetPasswordInput) {
-    const userId = await cache.get<string>(`reset:password:${input.token}`);
+    // Read and delete the token in one step so it can be used only once, even by concurrent requests.
+    const key = `reset:password:${input.token}`;
+    const result = await redis.multi().get(key).del(key).exec();
+    const raw = result?.[0]?.[1] as string | null | undefined;
+    const userId = raw ? (JSON.parse(raw) as string) : null;
 
     if (!userId) {
-      throw new BadRequestError('Invalid or expired reset token');
+      throw new BadRequestError('This password reset link is invalid or has expired', { code: 'INVALID_RESET_TOKEN' });
     }
 
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
@@ -362,7 +410,7 @@ export class AuthService {
       data: { isRevoked: true },
     });
 
-    await cache.del(`reset:password:${input.token}`);
+    await cache.del(`reset:password:user:${userId}`);
     await cache.del(CacheService.keys.user(userId));
 
     return { message: 'Password reset successfully' };

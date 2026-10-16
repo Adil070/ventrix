@@ -17,7 +17,7 @@ router.get('/sales/summary', async (req: Request, res: Response) => {
 
   const [summary, byStatus, topProducts, topCustomers] = await Promise.all([
     prisma.invoice.aggregate({
-      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
       _sum: { totalAmount: true, taxAmount: true, discountAmount: true, paidAmount: true, balanceAmount: true },
       _count: { id: true },
     }),
@@ -29,7 +29,7 @@ router.get('/sales/summary', async (req: Request, res: Response) => {
     }),
     prisma.invoiceItem.groupBy({
       by: ['productId'],
-      where: { invoice: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } } },
+      where: { invoice: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } } },
       _sum: { quantity: true, amount: true },
       _count: { id: true },
       orderBy: { _sum: { amount: 'desc' } },
@@ -37,7 +37,7 @@ router.get('/sales/summary', async (req: Request, res: Response) => {
     }),
     prisma.invoice.groupBy({
       by: ['customerId'],
-      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+      where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
       _sum: { totalAmount: true },
       orderBy: { _sum: { totalAmount: 'desc' } },
       take: 10,
@@ -93,7 +93,7 @@ router.get('/purchases/summary', async (req: Request, res: Response) => {
 // ─── Outstanding Reports ──────────────────────────────────────────────────────
 router.get('/outstanding/receivables', async (req: Request, res: Response) => {
   const invoices = await prisma.invoice.findMany({
-    where: { organizationId: req.organizationId!, balanceAmount: { gt: 0 }, status: { not: 'CANCELLED' } },
+    where: { organizationId: req.organizationId!, balanceAmount: { gt: 0 }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
     select: { customerId: true, balanceAmount: true, dueDate: true },
   });
   const customerMap = new Map<string, number>();
@@ -182,16 +182,22 @@ router.get('/inventory/fast-moving', async (req: Request, res: Response) => {
 
   const movements = await prisma.stockEntry.groupBy({
     by: ['productId'],
-    where: { organizationId: req.organizationId!, movementType: 'SALE', createdAt: { gte: from } },
+    // Sale entries are stored with NEGATIVE quantities (signed stock ledger), so the most-sold product has
+    // the smallest sum: order ascending. Scoped via product as legacy entries may lack organizationId.
+    where: { product: { organizationId: req.organizationId! }, movementType: 'SALE', createdAt: { gte: from } },
     _sum: { quantity: true },
-    orderBy: { _sum: { quantity: 'desc' } },
+    orderBy: { _sum: { quantity: 'asc' } },
     take: 20,
   });
 
   const productIds = movements.map((m: any) => m.productId!).filter(Boolean);
-  const products = await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true, sku: true, openingStock: true, sellingPrice: true } });
+  const products = await prisma.product.findMany({ where: { id: { in: productIds }, organizationId: req.organizationId! }, select: { id: true, name: true, sku: true, openingStock: true, sellingPrice: true } });
 
-  res.json(successResponse(movements.map((m: any) => ({ ...m, product: products.find(p => p.id === m.productId) }))));
+  res.json(successResponse(movements.map((m: any) => ({
+    ...m,
+    quantitySold: Math.abs(Number(m._sum?.quantity ?? 0)),
+    product: products.find(p => p.id === m.productId),
+  }))));
 });
 
 // ─── Alias routes (for backward-compatible test URLs) ─────────────────────────
@@ -200,7 +206,7 @@ router.get('/sales-summary', async (req: Request, res: Response) => {
   const from = (fromDate || startDate) ? new Date(fromDate || startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const to = (toDate || endDate) ? new Date(toDate || endDate) : new Date();
   const summary = await prisma.invoice.aggregate({
-    where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+    where: { organizationId: req.organizationId!, invoiceDate: { gte: from, lte: to }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
     _sum: { totalAmount: true, taxAmount: true, discountAmount: true, paidAmount: true, balanceAmount: true },
     _count: { id: true },
   });
@@ -221,7 +227,7 @@ router.get('/purchase-summary', async (req: Request, res: Response) => {
 
 router.get('/outstanding-receivables', async (req: Request, res: Response) => {
   const invoices = await prisma.invoice.findMany({
-    where: { organizationId: req.organizationId!, balanceAmount: { gt: 0 }, status: { not: 'CANCELLED' } },
+    where: { organizationId: req.organizationId!, balanceAmount: { gt: 0 }, status: { notIn: ['DRAFT', 'CANCELLED'] } },
     select: { customerId: true, balanceAmount: true, dueDate: true },
   });
   const customerMap = new Map<string, number>();

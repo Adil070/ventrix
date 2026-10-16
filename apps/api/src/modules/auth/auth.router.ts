@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { authController } from './auth.controller';
 import { validateBody, validateQuery } from '../../shared/middleware/validate.middleware';
 import { authRateLimiter, otpRateLimiter } from '../../shared/middleware/rate-limiter';
-import { authenticate } from '../../shared/middleware/auth.middleware';
+import { authenticate, optionalAuthenticate } from '../../shared/middleware/auth.middleware';
 import {
+  LogoutDto,
   RegisterDto,
   LoginDto,
   OTPLoginDto,
@@ -27,7 +28,9 @@ authRouter.post('/forgot-password', authRateLimiter, validateBody(ForgotPassword
 authRouter.post('/reset-password', validateBody(ResetPasswordDto), authController.resetPassword.bind(authController));
 authRouter.get('/verify-email', validateQuery(z.object({ token: z.string() })), authController.verifyEmail.bind(authController));
 
+// Logout revokes the refresh token it is given; it still works after the access token has expired.
+authRouter.post('/logout', optionalAuthenticate, validateBody(LogoutDto), authController.logout.bind(authController));
+
 // Protected routes
-authRouter.post('/logout', authenticate, validateBody(RefreshTokenDto), authController.logout.bind(authController));
 authRouter.post('/change-password', authenticate, validateBody(ChangePasswordDto), authController.changePassword.bind(authController));
 authRouter.get('/me', authenticate, authController.me.bind(authController));

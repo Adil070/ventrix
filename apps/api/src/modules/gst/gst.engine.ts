@@ -5,6 +5,51 @@ import { toDecimal, roundTo } from '../../shared/helpers/response.helper';
  * GST Engine - Indian GST Compliance
  * Handles GSTR-1, GSTR-2, GSTR-3B, reconciliation
  */
+type TaxSplit = { taxableValue: number; cgst: number; sgst: number; igst: number; total: number };
+const zeroSplit = (): TaxSplit => ({ taxableValue: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
+
+/**
+ * GST given back through credit notes (sales returns: output tax reduced) and debit notes (purchase returns:
+ * input credit reduced) dated in the period, read from their ledger entries. A note cancelled in the period
+ * is netted off through its reversal entry.
+ */
+export async function noteTaxAdjustments(organizationId: string, from: Date, to: Date) {
+  const noteEntries = await prisma.journalEntry.findMany({
+    where: { organizationId, isPosted: true, type: { in: ['CREDIT_NOTE', 'DEBIT_NOTE'] } },
+    select: { id: true, type: true, date: true },
+  });
+  const noteType = new Map(noteEntries.map(e => [e.id, e.type]));
+  const inPeriod = (d: Date) => d >= from && d <= to;
+  const reversals = noteEntries.length
+    ? await prisma.journalEntry.findMany({
+        where: { organizationId, isPosted: true, referenceType: 'REVERSAL', referenceId: { in: [...noteType.keys()] }, date: { gte: from, lte: to } },
+        select: { id: true, referenceId: true },
+      })
+    : [];
+  const entryType = new Map<string, string>();
+  for (const e of noteEntries) if (inPeriod(e.date)) entryType.set(e.id, e.type);
+  for (const r of reversals) entryType.set(r.id, noteType.get(r.referenceId!)!);
+  if (!entryType.size) return { creditNotes: zeroSplit(), debitNotes: zeroSplit() };
+
+  const lines = await prisma.journalEntryLine.findMany({
+    where: { journalEntryId: { in: [...entryType.keys()] }, account: { code: { in: ['2200', '2300', '2400', '4000', '5100'] } } },
+    select: { journalEntryId: true, debitAmount: true, creditAmount: true, account: { select: { code: true } } },
+  });
+  const creditNotes = zeroSplit(), debitNotes = zeroSplit();
+  const field: Record<string, keyof TaxSplit> = { '2200': 'cgst', '2300': 'sgst', '2400': 'igst', '4000': 'taxableValue', '5100': 'taxableValue' };
+  for (const l of lines) {
+    const isCredit = entryType.get(l.journalEntryId) === 'CREDIT_NOTE';
+    // Credit notes debit Sales/GST; debit notes credit Purchases/GST. Reversals carry the opposite sign and net off.
+    const amount = isCredit ? toDecimal(l.debitAmount) - toDecimal(l.creditAmount) : toDecimal(l.creditAmount) - toDecimal(l.debitAmount);
+    const target = isCredit ? creditNotes : debitNotes;
+    const key = field[l.account.code];
+    if ((isCredit && l.account.code === '5100') || (!isCredit && l.account.code === '4000')) continue;
+    target[key] = roundTo(target[key] + amount);
+  }
+  for (const t of [creditNotes, debitNotes]) t.total = roundTo(t.cgst + t.sgst + t.igst);
+  return { creditNotes, debitNotes };
+}
+
 export class GSTEngine {
   // ─── Validate GSTIN ───────────────────────────────────────────────────────────
   validateGSTIN(gstin: string): { valid: boolean; stateCode?: string; entityType?: string } {
@@ -73,7 +118,7 @@ export class GSTEngine {
     const invoices = await prisma.invoice.findMany({
       where: {
         organizationId,
-        status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+        status: { notIn: ['DRAFT', 'CANCELLED'] },
         invoiceDate: { gte: from, lte: to },
       },
       include: {
@@ -165,7 +210,7 @@ export class GSTEngine {
       prisma.invoice.aggregate({
         where: {
           organizationId,
-          status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+          status: { notIn: ['DRAFT', 'CANCELLED'] },
           invoiceDate: { gte: from, lte: to },
         },
         _sum: { taxableAmount: true, cgstAmount: true, sgstAmount: true, igstAmount: true, taxAmount: true },
@@ -173,26 +218,29 @@ export class GSTEngine {
       prisma.purchase.aggregate({
         where: {
           organizationId,
-          status: { notIn: ['CANCELLED'] },
+          status: { notIn: ['DRAFT', 'CANCELLED'] },
           purchaseDate: { gte: from, lte: to },
         },
         _sum: { taxableAmount: true, cgstAmount: true, sgstAmount: true, igstAmount: true, taxAmount: true },
       }),
     ]);
 
+    // Returns in the period reduce the tax: credit notes cut output tax, debit notes cut input credit.
+    const { creditNotes, debitNotes } = await noteTaxAdjustments(organizationId, from, to);
+
     const outputTax = {
-      taxableValue: toDecimal(salesData._sum.taxableAmount),
-      cgst: toDecimal(salesData._sum.cgstAmount),
-      sgst: toDecimal(salesData._sum.sgstAmount),
-      igst: toDecimal(salesData._sum.igstAmount),
-      total: toDecimal(salesData._sum.taxAmount),
+      taxableValue: roundTo(toDecimal(salesData._sum.taxableAmount) - creditNotes.taxableValue),
+      cgst: roundTo(toDecimal(salesData._sum.cgstAmount) - creditNotes.cgst),
+      sgst: roundTo(toDecimal(salesData._sum.sgstAmount) - creditNotes.sgst),
+      igst: roundTo(toDecimal(salesData._sum.igstAmount) - creditNotes.igst),
+      total: roundTo(toDecimal(salesData._sum.taxAmount) - creditNotes.total),
     };
 
     const inputTaxCredit = {
-      cgst: toDecimal(purchaseData._sum.cgstAmount),
-      sgst: toDecimal(purchaseData._sum.sgstAmount),
-      igst: toDecimal(purchaseData._sum.igstAmount),
-      total: toDecimal(purchaseData._sum.taxAmount),
+      cgst: roundTo(toDecimal(purchaseData._sum.cgstAmount) - debitNotes.cgst),
+      sgst: roundTo(toDecimal(purchaseData._sum.sgstAmount) - debitNotes.sgst),
+      igst: roundTo(toDecimal(purchaseData._sum.igstAmount) - debitNotes.igst),
+      total: roundTo(toDecimal(purchaseData._sum.taxAmount) - debitNotes.total),
     };
 
     const netGSTLiability = {
@@ -207,6 +255,8 @@ export class GSTEngine {
       outwardSupplies: outputTax,
       inwardSupplies: inputTaxCredit,
       netGSTLiability,
+      creditNotes,
+      debitNotes,
       dueDate: new Date(year, month, 20), // 20th of next month
     };
   }
@@ -237,7 +287,7 @@ export class GSTEngine {
       where: {
         invoice: {
           organizationId,
-          status: { in: ['CONFIRMED', 'PARTIALLY_PAID', 'PAID'] },
+          status: { notIn: ['DRAFT', 'CANCELLED'] },
           invoiceDate: { gte: from, lte: to },
         },
         hsnCode: { not: null },

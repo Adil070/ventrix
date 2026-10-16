@@ -2,6 +2,7 @@ import { prisma } from '../../infrastructure/database';
 import { NotFoundError, ConflictError, BadRequestError } from '../../shared/errors';
 import type { CreateSupplierInput, UpdateSupplierInput, SupplierQueryInput } from './supplier.dto';
 import { Prisma } from '@prisma/client';
+import { paymentOrgScope } from '../payments/payment.service';
 
 export class SupplierService {
   async createSupplier(organizationId: string, input: CreateSupplierInput) {
@@ -80,7 +81,13 @@ export class SupplierService {
       orderBy: { purchaseDate: 'asc' },
       select: { id: true, purchaseNumber: true, purchaseDate: true, totalAmount: true, paidAmount: true, balanceAmount: true, status: true },
     });
-    return { supplier, purchases, summary: { totalPurchased: purchases.reduce((s, p) => s + Number(p.totalAmount), 0), totalPaid: purchases.reduce((s, p) => s + Number(p.paidAmount), 0), totalOutstanding: purchases.reduce((s, p) => s + Number(p.balanceAmount), 0) } };
+    const payments = await prisma.payment.findMany({
+      where: { supplierId, type: 'PAYMENT', ...paymentOrgScope(organizationId), ...(fromDate && { paymentDate: { gte: new Date(fromDate) } }), ...(toDate && { paymentDate: { lte: new Date(toDate) } }) },
+      orderBy: { paymentDate: 'asc' },
+      select: { id: true, paymentNumber: true, paymentDate: true, amount: true, mode: true, purchaseId: true, notes: true },
+    });
+    const live = purchases.filter(p => p.status !== 'CANCELLED');
+    return { supplier, purchases, payments, summary: { totalPurchased: live.reduce((s, p) => s + Number(p.totalAmount), 0), totalPaid: live.reduce((s, p) => s + Number(p.paidAmount), 0), totalOutstanding: live.reduce((s, p) => s + Number(p.balanceAmount), 0) } };
   }
 }
 
