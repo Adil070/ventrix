@@ -14,6 +14,7 @@ import { Button, Card } from '@/components/shared';
 import { PartyPicker, ItemPicker, itemPrice } from '@/components/shared/Pickers';
 import type { SelectOption } from '@/components/shared/SearchSelect';
 import { StockShortDialog, type StockShortage } from './StockShortDialog';
+import { getPrintPrefs, printInvoice } from '@/lib/printing';
 
 type Kind = 'sale' | 'purchase';
 type PayStatus = 'full' | 'part' | 'none';
@@ -223,6 +224,8 @@ export function BillForm({ kind }: { kind: Kind }) {
 
       toast.success(kind === 'sale' ? 'Sale saved' : 'Purchase saved');
       if (andNew) {
+        // "Save & start new" stays on this screen, so print from here (the bill page handles the other path).
+        if (kind === 'sale' && createdId && getPrintPrefs().autoPrint) printInvoice(createdId);
         reset();
       } else if (kind === 'sale' && createdId) {
         router.push(`/billing/invoices/${createdId}?created=1`);

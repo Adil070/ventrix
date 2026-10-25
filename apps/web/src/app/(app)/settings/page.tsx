@@ -12,7 +12,8 @@ import { dropEmpty } from '@/lib/business';
 import { useOrgSettings } from '@/hooks/useOrganization';
 import { ExperiencePicker } from '@/components/home/HomeDashboard';
 import { PageHeader, Button, Card, StatusBadge } from '@/components/shared';
-import { Building2, Users, Lock, SlidersHorizontal, Mail } from 'lucide-react';
+import { Building2, Users, Lock, SlidersHorizontal, Mail, Printer } from 'lucide-react';
+import { PrintSettingsCard } from '@/components/settings/PrintSettingsCard';
 import { EmailSettingsCard } from '@/components/settings/EmailSettingsCard';
 
 const OrgSchema = z.object({
@@ -30,8 +31,8 @@ const OrgSchema = z.object({
 });
 
 type OrgForm = z.infer<typeof OrgSchema>;
-type Tab = 'organization' | 'experience' | 'members' | 'email' | 'security';
-const TABS: Tab[] = ['organization', 'experience', 'members', 'email', 'security'];
+type Tab = 'organization' | 'experience' | 'members' | 'email' | 'printing' | 'security';
+const TABS: Tab[] = ['organization', 'experience', 'members', 'email', 'printing', 'security'];
 
 // The API returns null for empty fields; the form needs strings.
 function toFormValues(org: any): OrgForm | undefined {
@@ -96,6 +97,7 @@ export default function SettingsPage() {
     { key: 'experience', label: 'App setup', icon: SlidersHorizontal },
     { key: 'members', label: 'Team', icon: Users },
     { key: 'email', label: 'Email', icon: Mail },
+    { key: 'printing', label: 'Printing', icon: Printer },
     { key: 'security', label: 'Password', icon: Lock },
   ];
 
@@ -189,6 +191,8 @@ export default function SettingsPage() {
           )}
 
           {tab === 'email' && <EmailSettingsCard businessName={org?.name} />}
+
+          {tab === 'printing' && <PrintSettingsCard />}
 
           {tab === 'security' && (
             <Card className="p-6">

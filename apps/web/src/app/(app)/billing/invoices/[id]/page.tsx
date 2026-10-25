@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
@@ -9,6 +9,7 @@ import api from '@/lib/api';
 import { cn, formatCurrency, formatDate } from '@/lib/utils';
 import { PAYMENT_MODES, type PaymentMode, paymentModeLabel, today, BILL_STATUS_TEXT } from '@/lib/business';
 import { useOrganization } from '@/hooks/useOrganization';
+import { getPrintPrefs, printInvoice, type PrintPrefs } from '@/lib/printing';
 import { StatusBadge, Button, Card, LoadingSpinner } from '@/components/shared';
 import { ArrowLeft, Download, CreditCard, X, Printer, CheckCircle2, MessageCircle, Plus } from 'lucide-react';
 
@@ -22,6 +23,9 @@ export default function InvoiceDetailPage() {
   const [payMode, setPayMode] = useState<PaymentMode>('CASH');
   const [payDate, setPayDate] = useState(today());
   const [payRef, setPayRef] = useState('');
+  // This device's printer settings (Settings → Printing); read after mount because they live in localStorage.
+  const [printPrefs, setPrintPrefs] = useState<PrintPrefs | null>(null);
+  useEffect(() => setPrintPrefs(getPrintPrefs()), []);
 
   const { data: invoice, isLoading } = useQuery({
     queryKey: ['invoice', id],
@@ -48,6 +52,17 @@ export default function InvoiceDetailPage() {
     onSuccess: () => { refresh(); toast.success('Bill finalised. Stock updated.'); },
     onError: (e: any) => toast.error(e?.response?.data?.message || 'Could not finalise'),
   });
+
+  // A sale saved with "print automatically" on prints once, even if this page is reloaded.
+  useEffect(() => {
+    if (!justCreated || !printPrefs?.autoPrint || !invoice?.id) return;
+    const key = `ventrix.autoPrinted.${invoice.id}`;
+    try {
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+    } catch { /* storage blocked: may print again on reload */ }
+    printInvoice(invoice.id, printPrefs.paper);
+  }, [justCreated, printPrefs, invoice?.id]);
 
   const handleDownloadPdf = async () => {
     try {
@@ -119,7 +134,12 @@ export default function InvoiceDetailPage() {
           <Button onClick={() => confirmMut.mutate()} loading={confirmMut.isPending}><CheckCircle2 className="w-4 h-4" /> Finalise bill</Button>
         )}
         {canReceive && <Button onClick={openPayment}><CreditCard className="w-4 h-4" /> Receive payment</Button>}
-        <Button variant="secondary" onClick={() => window.print()}><Printer className="w-4 h-4" /> Print</Button>
+        <Button variant="secondary" onClick={() => printInvoice(id, printPrefs?.paper)} title={printPrefs ? `Prints on ${printPrefs.paper === 'A4' ? 'A4' : `${printPrefs.paper} receipt`} (Settings → Printing)` : undefined}><Printer className="w-4 h-4" /> Print</Button>
+        {printPrefs && (
+          <Button variant="ghost" onClick={() => printInvoice(id, printPrefs.paper === 'A4' ? '80mm' : 'A4')}>
+            {printPrefs.paper === 'A4' ? 'Print receipt' : 'Print A4'}
+          </Button>
+        )}
         <a href={whatsappUrl} target="_blank" rel="noreferrer"><Button variant="secondary"><MessageCircle className="w-4 h-4" /> WhatsApp</Button></a>
         {invoice.status !== 'CANCELLED' && <Button variant="ghost" onClick={handleDownloadPdf}><Download className="w-4 h-4" /> PDF</Button>}
       </div>
