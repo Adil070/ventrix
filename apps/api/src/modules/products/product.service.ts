@@ -2,7 +2,7 @@ import { prisma } from '../../infrastructure/database';
 import { NotFoundError, ConflictError, BadRequestError } from '../../shared/errors';
 import type { CreateProductInput, UpdateProductInput, ProductQueryInput } from './product.dto';
 import { Prisma } from '@prisma/client';
-import { InventoryEngine, getDefaultWarehouse, resolveWarehouse } from '../inventory/inventory.engine';
+import { InventoryEngine, lockProducts, resolveWarehouse } from '../inventory/inventory.engine';
 
 const inventoryEngine = new InventoryEngine();
 
@@ -13,51 +13,48 @@ export class ProductService {
       if (existing) throw new ConflictError('SKU already exists');
     }
     if (input.warehouseId) await resolveWarehouse(prisma, organizationId, input.warehouseId);
-    const product = await prisma.product.create({
-      data: {
-        organizationId,
-        name: input.name,
-        sku: input.sku || null,
-        barcode: input.barcode,
-        hsnCode: input.hsnCode,
-        sacCode: input.sacCode,
-        description: input.description,
-        categoryId: input.categoryId,
-        brandId: input.brandId,
-        unitId: input.unitId,
-        type: input.type as any,
-        taxRate: input.taxRate,
-        taxRateId: input.taxRateId,
-        sellingPrice: input.sellingPrice,
-        costPrice: input.purchasePrice,
-        mrp: input.mrp,
-        openingStock: input.openingStock,
-        reorderPoint: input.reorderLevel,
-        maxStockLevel: input.maxStockLevel,
-        valuationMethod: input.valuationMethod as any,
-        trackInventory: input.trackInventory,
-        hasBatchTracking: input.hasBatches,
-        hasSerialTracking: input.hasSerialNumbers,
-        hasVariants: input.hasVariants,
-        images: input.imageUrls ?? [],
-        attributes: input.attributes as Prisma.InputJsonValue,
-      },
-    });
-
-    // Create opening stock movement if applicable
-    if (input.trackInventory && input.openingStock > 0) {
-      // Get default warehouse or skip stock entry if no warehouse exists
-      const defaultWarehouse = await prisma.warehouse.findFirst({
-        where: { organizationId, isActive: true },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }]
+    await this.assertUnitInOrg(organizationId, input.unitId);
+    return prisma.$transaction(async (tx) => {
+      const product = await tx.product.create({
+        data: {
+          organizationId,
+          name: input.name,
+          sku: input.sku || null,
+          barcode: input.barcode,
+          hsnCode: input.hsnCode,
+          sacCode: input.sacCode,
+          description: input.description,
+          categoryId: input.categoryId,
+          brandId: input.brandId,
+          unitId: input.unitId,
+          type: input.type as any,
+          taxRate: input.taxRate,
+          taxRateId: input.taxRateId,
+          sellingPrice: input.sellingPrice,
+          costPrice: input.purchasePrice,
+          mrp: input.mrp,
+          openingStock: input.openingStock,
+          reorderPoint: input.reorderLevel,
+          maxStockLevel: input.maxStockLevel,
+          valuationMethod: input.valuationMethod as any,
+          trackInventory: input.trackInventory,
+          hasBatchTracking: input.hasBatches,
+          hasSerialTracking: input.hasSerialNumbers,
+          hasVariants: input.hasVariants,
+          images: input.imageUrls ?? [],
+          attributes: input.attributes as Prisma.InputJsonValue,
+        },
       });
 
-      if (defaultWarehouse) {
-        await prisma.stockEntry.create({
+      // Opening stock is booked in the same transaction so product.openingStock and the stock ledger always
+      // agree; with no active warehouse the create fails (resolveWarehouse throws) instead of skipping the entry.
+      if (input.trackInventory && input.openingStock > 0) {
+        const warehouse = await resolveWarehouse(tx, organizationId, input.warehouseId);
+        await tx.stockEntry.create({
           data: {
             organizationId,
             productId: product.id,
-            warehouseId: input.warehouseId ?? defaultWarehouse.id,
+            warehouseId: warehouse.id,
             movementType: 'OPENING_STOCK',
             quantity: input.openingStock,
             rate: input.purchasePrice ?? 0,
@@ -67,9 +64,9 @@ export class ProductService {
           },
         });
       }
-    }
 
-    return product;
+      return product;
+    });
   }
 
   async listProducts(organizationId: string, query: ProductQueryInput) {
@@ -105,14 +102,18 @@ export class ProductService {
       const clash = await prisma.product.findFirst({ where: { organizationId, sku: input.sku, id: { not: id } }, select: { id: true } });
       if (clash) throw new ConflictError('SKU already exists');
     }
+    await this.assertUnitInOrg(organizationId, input.unitId);
     // A stock change made through the product form is booked as an adjustment so the stock ledger
-    // (signed stock entries) keeps matching product.openingStock.
-    const stockDelta = input.openingStock !== undefined ? Number(input.openingStock) - Number(product.openingStock) : 0;
+    // (signed stock entries) keeps matching product.openingStock. The row is locked and re-read inside the
+    // transaction, so a sale or purchase saved meanwhile is not overwritten by a stale delta.
     const trackInventory = input.trackInventory ?? product.trackInventory;
     return prisma.$transaction(async (tx) => {
-      if (stockDelta && trackInventory) {
-        const warehouse = await getDefaultWarehouse(tx, organizationId);
-        if (warehouse) {
+      if (input.openingStock !== undefined && trackInventory) {
+        await lockProducts(tx, [id]);
+        const current = await tx.product.findUniqueOrThrow({ where: { id }, select: { openingStock: true } });
+        const stockDelta = Number(input.openingStock) - Number(current.openingStock);
+        if (stockDelta) {
+          const warehouse = await resolveWarehouse(tx, organizationId);
           await inventoryEngine.recordStockMovement(tx, {
             organizationId, productId: id, warehouseId: warehouse.id,
             movementType: stockDelta > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
@@ -133,6 +134,7 @@ export class ProductService {
         sellingPrice: input.sellingPrice,
         costPrice: input.purchasePrice,
         mrp: input.mrp,
+        unitId: input.unitId,
         openingStock: input.openingStock,
         trackInventory: input.trackInventory,
         reorderPoint: input.reorderLevel,
@@ -140,6 +142,13 @@ export class ProductService {
       },
     });
     });
+  }
+
+  /** A product may only use one of its own organisation's units. */
+  private async assertUnitInOrg(organizationId: string, unitId?: string) {
+    if (unitId && !(await prisma.unit.count({ where: { id: unitId, organizationId } }))) {
+      throw new NotFoundError('Unit', unitId);
+    }
   }
 
   async deleteProduct(organizationId: string, id: string) {

@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+// Env flags are compared as text: z.coerce.boolean() turns the string "false" into true.
+const envBoolean = (fallback: boolean) =>
+  z.string().optional().transform((v) => (v === undefined || v === '' ? fallback : v === 'true' || v === '1'));
+
 const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(8000),
@@ -25,12 +29,12 @@ const configSchema = z.object({
   S3_SECRET_KEY: z.string(),
   S3_BUCKET: z.string().default('ventrix-files'),
   S3_REGION: z.string().default('ap-south-1'),
-  S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
+  S3_FORCE_PATH_STYLE: envBoolean(true),
 
   // Email
   SMTP_HOST: z.string().default('localhost'),
   SMTP_PORT: z.coerce.number().default(1025),
-  SMTP_SECURE: z.coerce.boolean().default(false),
+  SMTP_SECURE: envBoolean(false),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   FROM_EMAIL: z.string().default('noreply@ventrix.com'),
@@ -56,18 +60,27 @@ const configSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
 
-  // Encryption
-  ENCRYPTION_KEY: z.string().min(32).optional(),
+  // Encryption (at rest, e.g. each client's own SMTP password). Required to save client email settings.
+  ENCRYPTION_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(32).optional()),
 
   // Rate Limiting
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
-  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
+  // Per user (or per IP when signed out) per window. One screen loads several API calls, so 100 ran out in minutes.
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(1000),
 
   // CORS
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
   // Logging
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  // Scheduled jobs: the external scheduler (GitHub Actions / cron-job.org) sends this in X-Cron-Secret.
+  // Unset disables POST /api/v1/internal/* (503).
+  CRON_SECRET: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(32).optional()),
+
+  // Feature Flags
+  // Real-time push over Socket.io — off until a feature needs it (keeps the API free-tier friendly).
+  FEATURE_REALTIME: envBoolean(false),
 });
 
 function loadConfig() {

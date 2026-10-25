@@ -12,7 +12,7 @@
 | Database | PostgreSQL 16 (via Prisma ORM 5) |
 | Cache | Redis 7 (ioredis) |
 | Queue | Bull (Redis-backed) |
-| Real-time | Socket.IO 4 |
+| Real-time | Socket.IO 4 — future feature, off unless `FEATURE_REALTIME=true` |
 | Auth | JWT + bcryptjs + Google OAuth 2.0 + TOTP |
 | Storage | AWS S3 / MinIO |
 | Email | Nodemailer (SMTP) |
@@ -384,7 +384,7 @@ npm run type-check   # tsc --noEmit
 |---------|---------|
 | REST API | `http://localhost:8000/api` |
 | Swagger UI | `http://localhost:8000/api/docs` |
-| WebSocket | `ws://localhost:8000` |
+| WebSocket | `ws://localhost:8000` (only when `FEATURE_REALTIME=true`) |
 | Frontend | `http://localhost:3000` |
 | Prisma Studio | `http://localhost:5555` |
 

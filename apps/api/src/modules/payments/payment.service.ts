@@ -145,7 +145,7 @@ export class PaymentService {
       ...(toDate && { paymentDate: { lte: new Date(toDate) } }),
     };
     const [data, total] = await Promise.all([
-      prisma.payment.findMany({ where, skip: (page - 1) * limit, take: limit, orderBy: { paymentDate: 'desc' }, include: { customer: { select: { id: true, name: true } }, supplier: { select: { id: true, name: true } } } }),
+      prisma.payment.findMany({ where, skip: (page - 1) * limit, take: limit, orderBy: [{ paymentDate: 'desc' }, { createdAt: 'desc' }], include: { customer: { select: { id: true, name: true } }, supplier: { select: { id: true, name: true } } } }),
       prisma.payment.count({ where }),
     ]);
     return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };

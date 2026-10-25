@@ -80,6 +80,40 @@ function RankedList({ title, rows, empty }: { title: string; rows: { key: string
   );
 }
 
+const slotLabel = (hour: number) => `${hour % 12 || 12}:00 ${hour < 12 ? 'AM' : 'PM'}`;
+
+// The scheduled runs (7am, 11am, 3pm, 7pm and the 10pm close) of the most recent day that has any.
+function SalesUpdates({ snapshots }: { snapshots: any[] }) {
+  const day = snapshots[0]?.reportDate;
+  const rows = snapshots.filter(s => s.reportDate === day).sort((a, b) => a.slot - b.slot);
+  if (!rows.length) return null;
+  return (
+    <Card className="p-5">
+      <div className="flex items-baseline justify-between mb-3">
+        <h3 className="font-semibold text-gray-900 dark:text-white">Sales updates</h3>
+        <span className="text-xs text-gray-400">{new Date(day).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })} · also emailed to owners</span>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-xs font-semibold text-gray-500 uppercase border-b border-gray-200 dark:border-gray-700">
+            <th className="text-left py-2">As of</th><th className="text-right py-2">Sales</th><th className="text-right py-2">Bills</th><th className="text-right py-2">Collected</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(s => (
+            <tr key={s.id} className="border-b border-gray-100 dark:border-gray-700 last:border-0">
+              <td className="py-2">{s.slot === 22 ? 'Day close (10:00 PM)' : slotLabel(s.slot)}</td>
+              <td className="py-2 text-right font-semibold">{formatCurrency(num(s.data?.totalSales))}</td>
+              <td className="py-2 text-right">{num(s.data?.invoiceCount)}</td>
+              <td className="py-2 text-right text-green-600">{formatCurrency(num(s.data?.collected))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
 function PartyTable({ title, rows, empty, tone }: { title: string; rows: any[]; empty: string; tone: string }) {
   const total = rows.reduce((s, r) => s + num(r.outstandingAmount), 0);
   return (
@@ -113,6 +147,7 @@ export default function ReportsPage() {
   const periodLabel = PERIODS.find(p => p.key === period)!.label.toLowerCase();
 
   const sales = useQuery({ queryKey: ['report-sales', period], queryFn: () => api.reports.getSalesSummary(range), select: r => r.data.data, enabled: reportType === 'sales' });
+  const snapshots = useQuery({ queryKey: ['report-sales-snapshots'], queryFn: () => api.reports.getSalesSnapshots(), select: r => (r.data.data || []) as any[], enabled: reportType === 'sales' });
   const purchases = useQuery({ queryKey: ['report-purchases', period], queryFn: () => api.reports.getPurchasesSummary(range), select: r => r.data.data, enabled: reportType === 'purchases' });
   const expenses = useQuery({ queryKey: ['report-expenses', period], queryFn: () => api.reports.getExpensesSummary(range), select: r => r.data.data, enabled: reportType === 'expenses' });
   const outstanding = useQuery({
@@ -161,16 +196,20 @@ export default function ReportsPage() {
         const s = sales.data.summary ?? {};
         const count = num(s._count?.id);
         const total = num(s._sum?.totalAmount);
+        // Returns (credit notes) in the period come off sales and GST; bills keep their original amounts.
+        const returned = num(sales.data.returns?.total);
+        const gst = num(s._sum?.taxAmount) - num(sales.data.returns?.tax);
         return (
           <div className="space-y-4">
+            {snapshots.data && <SalesUpdates snapshots={snapshots.data} />}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <Stat label={`Sales ${periodLabel}`} value={formatCurrency(total)} sub={plural(count, 'bill')} />
+              <Stat label={`Sales ${periodLabel}`} value={formatCurrency(total - returned)} sub={`${plural(count, 'bill')}${returned > 0 ? ` · ${formatCurrency(returned)} returned` : ''}`} />
               <Stat label="Average bill" value={formatCurrency(count ? total / count : 0)} />
               <Stat label="Collected" value={formatCurrency(num(s._sum?.paidAmount))} tone="good" />
               <Stat label="Still to collect" value={formatCurrency(num(s._sum?.balanceAmount))} tone={num(s._sum?.balanceAmount) > 0 ? 'bad' : undefined} />
             </div>
-            {(num(s._sum?.taxAmount) > 0 || num(s._sum?.discountAmount) > 0) && (
-              <p className="text-sm text-gray-500">Includes {formatCurrency(num(s._sum?.taxAmount))} GST{num(s._sum?.discountAmount) > 0 && ` · ${formatCurrency(num(s._sum?.discountAmount))} given as discount`}.</p>
+            {(gst > 0 || num(s._sum?.discountAmount) > 0) && (
+              <p className="text-sm text-gray-500">Includes {formatCurrency(gst)} GST{num(s._sum?.discountAmount) > 0 && ` · ${formatCurrency(num(s._sum?.discountAmount))} given as discount`}.</p>
             )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <RankedList

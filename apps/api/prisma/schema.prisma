@@ -353,6 +353,8 @@ model Organization {
   deliveryChallan    DeliveryChallan[]
   returnOrders       ReturnOrder[]
   productionOrders   ProductionOrder[]
+  salesReportSnapshots SalesReportSnapshot[]
+  emailSettings      OrganizationEmailSettings?
 
   @@map("organizations")
 }
@@ -1985,6 +1987,45 @@ model Document {
 // ============================================================
 // NOTIFICATIONS
 // ============================================================
+
+// The business's own outgoing mail account (e.g. its Gmail). Business emails use it once a test send has
+// worked (verifiedAt set); otherwise they go from the platform account. The password is AES-256-GCM encrypted.
+model OrganizationEmailSettings {
+  id                String       @id @default(cuid())
+  organizationId    String       @unique
+  host              String
+  port              Int
+  secure            Boolean
+  username          String
+  passwordEncrypted String
+  fromEmail         String
+  fromName          String?
+  verifiedAt        DateTime?
+  lastError         String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_email_settings")
+}
+
+// One row per scheduled sales report run (07:00, 11:00, 15:00, 19:00, 22:00 in the org's timezone).
+// The unique key makes a repeated or late scheduler call for the same slot a no-op.
+model SalesReportSnapshot {
+  id             String       @id @default(cuid())
+  organizationId String
+  reportDate     DateTime     @db.Date
+  slot           Int
+  generatedAt    DateTime     @default(now())
+  data           Json
+  emailedTo      String[]
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, reportDate, slot])
+  @@map("sales_report_snapshots")
+}
 
 model Notification {
   id             String           @id @default(cuid())

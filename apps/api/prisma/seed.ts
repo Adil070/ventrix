@@ -270,11 +270,12 @@ async function main() {
   console.log('✅ Warehouse created');
 
   // ── Expense categories ────────────────────────────────────
+  // Categories belong to the organisation; rows without one are visible to no business.
   const expCats = ['Office Supplies', 'Travel', 'Utilities', 'Marketing', 'Rent', 'Salary', 'Maintenance'];
   for (const name of expCats) {
-    const existing = await prisma.expenseCategory.findFirst({ where: { name } });
+    const existing = await prisma.expenseCategory.findFirst({ where: { name, organizationId: org.id } });
     if (!existing) {
-      await prisma.expenseCategory.create({ data: { name, isActive: true } });
+      await prisma.expenseCategory.create({ data: { name, organizationId: org.id, isActive: true } });
     }
   }
   console.log('✅ Expense categories created');

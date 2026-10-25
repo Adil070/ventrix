@@ -12,7 +12,8 @@ import { dropEmpty } from '@/lib/business';
 import { useOrgSettings } from '@/hooks/useOrganization';
 import { ExperiencePicker } from '@/components/home/HomeDashboard';
 import { PageHeader, Button, Card, StatusBadge } from '@/components/shared';
-import { Building2, Users, Lock, SlidersHorizontal } from 'lucide-react';
+import { Building2, Users, Lock, SlidersHorizontal, Mail } from 'lucide-react';
+import { EmailSettingsCard } from '@/components/settings/EmailSettingsCard';
 
 const OrgSchema = z.object({
   name: z.string().min(1),
@@ -29,8 +30,8 @@ const OrgSchema = z.object({
 });
 
 type OrgForm = z.infer<typeof OrgSchema>;
-type Tab = 'organization' | 'experience' | 'members' | 'security';
-const TABS: Tab[] = ['organization', 'experience', 'members', 'security'];
+type Tab = 'organization' | 'experience' | 'members' | 'email' | 'security';
+const TABS: Tab[] = ['organization', 'experience', 'members', 'email', 'security'];
 
 // The API returns null for empty fields; the form needs strings.
 function toFormValues(org: any): OrgForm | undefined {
@@ -43,6 +44,22 @@ function toFormValues(org: any): OrgForm | undefined {
     invoicePrefix: org.invoicePrefix ?? 'INV', currency: org.currency ?? 'INR', timezone: org.timezone ?? 'Asia/Kolkata',
   };
 }
+
+// People type "www.myshop.in"; the API needs a full URL.
+const withScheme = (url?: string) => {
+  const v = url?.trim();
+  return v && !/^https?:\/\//i.test(v) ? `https://${v}` : v;
+};
+
+const FIELD_LABELS: Record<string, string> = { website: 'Website', email: 'Email', gstin: 'GSTIN', pan: 'PAN', currency: 'Currency', invoicePrefix: 'Invoice prefix' };
+
+// Name the field that failed instead of a bare "Validation failed".
+const fieldError = (e: any) => {
+  const d = e?.response?.data;
+  const first = (d?.errors ?? d?.details)?.[0];
+  if (first?.field) return `${FIELD_LABELS[first.field] ?? first.field}: ${first.message}`;
+  return d?.message || 'Could not save. Please try again.';
+};
 
 const PasswordSchema = z.object({
   currentPassword: z.string().min(1),
@@ -57,15 +74,15 @@ export default function SettingsPage() {
   const requested = useSearchParams().get('tab') as Tab | null;
   const [tab, setTab] = useState<Tab>(requested && TABS.includes(requested) ? requested : 'organization');
   const { org, experience, hasChosenExperience, updateSettings, isSaving } = useOrgSettings();
-  const { data: members } = useQuery({ queryKey: ['org-members'], queryFn: () => api.users.getOrgMembers(), select: r => r.data.data, enabled: tab === 'members' });
+  const { data: members } = useQuery({ queryKey: ['org-members'], queryFn: () => api.users.getOrgMembers(), select: r => (Array.isArray(r.data.data) ? r.data.data : []) as any[], enabled: tab === 'members' });
 
   const { register: regOrg, handleSubmit: handleOrg, reset: resetOrg } = useForm<OrgForm>({ resolver: zodResolver(OrgSchema), values: toFormValues(org) });
   const { register: regPwd, handleSubmit: handlePwd, reset: resetPwd, formState: { errors: pwdErrors } } = useForm<z.infer<typeof PasswordSchema>>({ resolver: zodResolver(PasswordSchema) });
 
   const updateOrgMut = useMutation({
-    mutationFn: (d: OrgForm) => api.organization.update(dropEmpty({ ...d, gstin: d.gstin?.toUpperCase(), pan: d.pan?.toUpperCase() })),
+    mutationFn: (d: OrgForm) => api.organization.update(dropEmpty({ ...d, website: withScheme(d.website), gstin: d.gstin?.toUpperCase(), pan: d.pan?.toUpperCase() })),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['organization'] }); toast.success('Business details saved'); },
-    onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
+    onError: (e: any) => toast.error(fieldError(e)),
   });
 
   const changePwdMut = useMutation({
@@ -78,6 +95,7 @@ export default function SettingsPage() {
     { key: 'organization', label: 'Business details', icon: Building2 },
     { key: 'experience', label: 'App setup', icon: SlidersHorizontal },
     { key: 'members', label: 'Team', icon: Users },
+    { key: 'email', label: 'Email', icon: Mail },
     { key: 'security', label: 'Password', icon: Lock },
   ];
 
@@ -151,7 +169,7 @@ export default function SettingsPage() {
             <Card className="p-6">
               <h3 className="font-semibold text-gray-900 dark:text-white text-lg mb-4">Team Members</h3>
               <div className="space-y-3">
-                {(members?.members || []).map((m: any) => (
+                {(members || []).map((m: any) => (
                   <div key={m.id} className="flex items-center justify-between py-3 px-4 border border-gray-200 dark:border-gray-700 rounded-lg">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-orange-100 dark:bg-orange-900/30 rounded-full flex items-center justify-center text-orange-700 dark:text-orange-400 font-bold">
@@ -165,10 +183,12 @@ export default function SettingsPage() {
                     <StatusBadge status={m.role} />
                   </div>
                 ))}
-                {!members?.members?.length && <p className="text-center py-8 text-gray-500">No team members yet</p>}
+                {!members?.length && <p className="text-center py-8 text-gray-500">No team members yet</p>}
               </div>
             </Card>
           )}
+
+          {tab === 'email' && <EmailSettingsCard businessName={org?.name} />}
 
           {tab === 'security' && (
             <Card className="p-6">

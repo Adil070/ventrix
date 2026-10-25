@@ -51,6 +51,7 @@ import { subscriptionRouter } from './modules/subscriptions/subscription.router'
 import { dashboardRouter } from './modules/dashboard/dashboard.router';
 import { analyticsRouter } from './modules/analytics/analytics.router';
 import { returnRouter } from './modules/returns/return.router';
+import { internalRouter } from './modules/sales-reports/internal.router';
 
 export function createApp(): Application {
   const app = express();
@@ -124,6 +125,9 @@ export function createApp(): Application {
 
   // Public routes
   apiV1.use('/auth', authRouter);
+
+  // Scheduler-only routes (X-Cron-Secret, no user session)
+  apiV1.use('/internal', internalRouter);
 
   // Tenant middleware (extracts org context)
   apiV1.use(tenantMiddleware);

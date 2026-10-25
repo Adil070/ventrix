@@ -13,6 +13,7 @@ import { useOrgSettings } from '@/hooks/useOrganization';
 import { Button, Card } from '@/components/shared';
 import { PartyPicker, ItemPicker, itemPrice } from '@/components/shared/Pickers';
 import type { SelectOption } from '@/components/shared/SearchSelect';
+import { StockShortDialog, type StockShortage } from './StockShortDialog';
 
 type Kind = 'sale' | 'purchase';
 type PayStatus = 'full' | 'part' | 'none';
@@ -27,6 +28,8 @@ interface Line {
   taxRate: number;
   hsnCode?: string;
   isNew?: boolean;
+  /** Stock when picked (tracked items, sales only); used to warn before saving. */
+  stock?: number | null;
 }
 
 const GST_RATES = [0, 5, 12, 18, 28];
@@ -92,6 +95,7 @@ export function BillForm({ kind }: { kind: Kind }) {
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [savedPurchase, setSavedPurchase] = useState<{ total: number; supplier: string } | null>(null);
+  const [shortages, setShortages] = useState<{ items: StockShortage[]; andNew: boolean } | null>(null);
 
   const orgState = String(org?.address?.state || '').trim().toLowerCase();
   const partyState = String(party?.data?.billingAddress?.state || '').trim().toLowerCase();
@@ -121,6 +125,7 @@ export function BillForm({ kind }: { kind: Kind }) {
         taxRate: chargesGst ? Number(p.taxRate ?? defaultTax) : 0,
         hsnCode: p.hsnCode || undefined,
         isNew: !!p.__new,
+        stock: kind === 'sale' && p.trackInventory ? Number(p.openingStock || 0) : null,
       } : l);
       // Always keep one empty row at the bottom, like a till.
       return next[next.length - 1].productId ? [...next, emptyLine(defaultTax)] : next;
@@ -225,6 +230,12 @@ export function BillForm({ kind }: { kind: Kind }) {
         setSavedPurchase({ total, supplier: party?.label || '' });
       }
     } catch (e: any) {
+      // Short stock blocks the sale; offer to add the stock that just arrived instead of a dead-end error.
+      const short = e?.response?.data?.code === 'INSUFFICIENT_STOCK' ? e.response.data.details?.shortages : null;
+      if (Array.isArray(short) && short.length) {
+        setShortages({ items: short, andNew });
+        return;
+      }
       const details = e?.response?.data?.details ?? e?.response?.data?.errors;
       const first = Array.isArray(details) && details[0] ? `${details[0].field}: ${details[0].message}` : '';
       toast.error(e?.response?.data?.message ? `${e.response.data.message}${first ? ` (${first})` : ''}` : 'Could not save. Check your connection and try again.');
@@ -311,6 +322,9 @@ export function BillForm({ kind }: { kind: Kind }) {
                     priceField={kind === 'sale' ? 'sellingPrice' : 'purchasePrice'}
                     trackInventory={experience !== 'simple'}
                   />
+                  {l.stock != null && Number(l.quantity) > l.stock && (
+                    <p className="text-xs text-amber-600 mt-1">Only {l.stock} in stock. You can add the rest when you save.</p>
+                  )}
                 </div>
                 {!empty && <>
                   <input aria-label="Quantity" inputMode="decimal" value={l.quantity} onChange={e => updateLine(l.key, { quantity: e.target.value })} className={inputCls} placeholder="Qty" />
@@ -390,6 +404,19 @@ export function BillForm({ kind }: { kind: Kind }) {
           </div>
         )}
       </Card>
+
+      {shortages && (
+        <StockShortDialog
+          shortages={shortages.items}
+          onClose={() => setShortages(null)}
+          onStockAdded={() => {
+            const { andNew } = shortages;
+            setShortages(null);
+            qc.invalidateQueries({ queryKey: ['item-picker'] });
+            save(andNew);
+          }}
+        />
+      )}
 
       {/* Sticky save bar, so the main action is always one tap away */}
       <div className="sticky bottom-0 -mb-4 md:-mb-6 z-20 bg-white/95 dark:bg-gray-800/95 backdrop-blur border border-gray-200 dark:border-gray-700 rounded-t-xl shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">

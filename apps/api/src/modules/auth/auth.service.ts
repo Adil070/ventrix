@@ -39,6 +39,8 @@ const ACTIVE_ORG_INCLUDE = {
   },
 };
 
+const DEFAULT_EXPENSE_CATEGORIES = ['Rent', 'Salary', 'Electricity & Utilities', 'Transport', 'Office Supplies', 'Marketing', 'Maintenance', 'Other'];
+
 export class AuthService {
   // ─── Register ────────────────────────────────────────────────────────────────
   async register(input: RegisterInput) {
@@ -101,6 +103,11 @@ export class AuthService {
 
       // Create default chart of accounts
       await this.createDefaultAccounts(tx, org.id);
+
+      // Starter expense categories, so the expense form has choices from day one.
+      await tx.expenseCategory.createMany({
+        data: DEFAULT_EXPENSE_CATEGORIES.map((name) => ({ organizationId: org.id, name, isActive: true })),
+      });
 
       // Create trial subscription
       await tx.subscription.create({

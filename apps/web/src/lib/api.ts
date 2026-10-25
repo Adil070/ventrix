@@ -360,6 +360,7 @@ class ApiClient {
     expenses: { summary: (p?: any) => this.client.get('/reports/expenses/summary', { params: p }) },
     inventory: { aging: () => this.client.get('/reports/inventory/aging'), fastMoving: (p?: any) => this.client.get('/reports/inventory/fast-moving', { params: p }) },
     getSalesSummary: (p?: any) => this.client.get('/reports/sales/summary', { params: p }),
+    getSalesSnapshots: (p?: { date?: string }) => this.client.get('/reports/sales-snapshots', { params: p }),
     getPurchasesSummary: (p?: any) => this.client.get('/reports/purchases/summary', { params: p }),
     getOutstanding: () => Promise.all([this.client.get('/reports/outstanding/receivables'), this.client.get('/reports/outstanding/payables')]).then(([r, p]) => ({ data: { data: { receivables: r.data.data, payables: p.data.data } } })),
     getExpensesSummary: (p?: any) => this.client.get('/reports/expenses/summary', { params: p }),
@@ -389,6 +390,12 @@ class ApiClient {
     auditLogs: (p?: any) => this.client.get('/organizations/audit-logs', { params: p }),
     priceLists: { list: () => this.client.get('/organizations/price-lists'), create: (d: any) => this.client.post('/organizations/price-lists', d) },
     paymentTerms: () => this.client.get('/organizations/payment-terms'),
+    emailSettings: {
+      get: () => this.client.get('/organizations/email-settings'),
+      save: (d: any) => this.client.put('/organizations/email-settings', d),
+      test: () => this.client.post('/organizations/email-settings/test'),
+      remove: () => this.client.delete('/organizations/email-settings'),
+    },
   };
 
   // Subscription

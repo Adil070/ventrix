@@ -77,24 +77,20 @@ export class PurchaseService {
         include: { items: true },
       });
 
-      // Update inventory
-      // Get default warehouse for stock entries
-      const defaultWarehouse = await tx.warehouse.findFirst({
-        where: { organizationId, isActive: true },
-        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }]
-      });
-
+      // Update inventory. A tracked item with no active warehouse to land in fails the whole purchase
+      // (resolveWarehouse throws) instead of saving the bill without its stock.
       await lockProducts(tx, productIds);
+      let defaultWarehouseId: string | undefined;
       for (const item of itemsData) {
-        const product = await tx.product.findFirst({ where: { id: item.productId, organizationId } });
-        if (product?.trackInventory && defaultWarehouse) {
-          const newStock = Number(product.openingStock) + item.quantity;
-          await tx.product.update({ where: { id: item.productId }, data: { openingStock: newStock, costPrice: item.unitPrice } });
+        const product = await tx.product.findFirst({ where: { id: item.productId, organizationId }, select: { trackInventory: true } });
+        if (product?.trackInventory) {
+          if (!item.warehouseId && !defaultWarehouseId) defaultWarehouseId = (await resolveWarehouse(tx, organizationId)).id;
+          await tx.product.update({ where: { id: item.productId }, data: { openingStock: { increment: item.quantity }, costPrice: item.unitPrice } });
           await tx.stockEntry.create({
             data: {
               organizationId,
               productId: item.productId,
-              warehouseId: item.warehouseId ?? defaultWarehouse.id,
+              warehouseId: item.warehouseId ?? defaultWarehouseId!,
               movementType: 'PURCHASE',
               quantity: item.quantity,
               rate: item.unitPrice,

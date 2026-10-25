@@ -60,6 +60,32 @@ export class BadRequestError extends AppError {
   }
 }
 
+export interface StockShortage {
+  productId: string;
+  productName: string;
+  warehouseId: string;
+  warehouseName: string;
+  requested: number;
+  available: number;
+  /** Quantity to add to the warehouse so the sale fits exactly. */
+  shortBy: number;
+}
+
+/** A sale needs more than the warehouse holds; `details.shortages` lists every short line so the UI can offer a fix. */
+export class InsufficientStockError extends AppError {
+  constructor(shortages: StockShortage[]) {
+    const [first] = shortages;
+    super(
+      shortages.length === 1
+        ? `Not enough stock of "${first.productName}" in ${first.warehouseName}: ${first.available} available, ${first.requested} needed`
+        : `Not enough stock for ${shortages.length} items`,
+      409,
+      'INSUFFICIENT_STOCK',
+      { shortages }
+    );
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = 'Too many requests') {
     super(message, 429, 'TOO_MANY_REQUESTS');

@@ -37,6 +37,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [loadedStock, setLoadedStock] = useState<number | null>(null);
   const [tab, setTab] = useState<'all' | 'low-stock'>('all');
 
   const { data, isLoading } = useQuery({
@@ -52,7 +53,14 @@ export default function ProductsPage() {
   const productType = watch('type');
 
   const saveMut = useMutation({
-    mutationFn: (d: ProductForm) => editId ? api.products.update(editId, d) : api.products.create(d),
+    mutationFn: (raw: ProductForm) => {
+      const d = { ...raw, unitId: raw.unitId || undefined }; // "No unit" is sent as absent, not ""
+      if (!editId) return api.products.create(d);
+      // Send the stock count only when the user changed it. The value loaded into the form goes stale as soon
+      // as a sale or purchase is saved, and sending it back would undo that stock movement.
+      const { openingStock, ...rest } = d;
+      return api.products.update(editId, openingStock === loadedStock ? rest : d);
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['products'] }); qc.invalidateQueries({ queryKey: ['products-simple'] }); qc.invalidateQueries({ queryKey: ['inventory-summary'] }); toast.success(editId ? 'Updated' : 'Product created'); setShowForm(false); reset(); setEditId(null); },
     onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
   });
@@ -63,7 +71,9 @@ export default function ProductsPage() {
     onError: (e: any) => toast.error(e?.response?.data?.message || 'Failed'),
   });
 
-  const openCreate = () => { reset({ type: 'PRODUCT', taxRate: 18, sellingPrice: 0, purchasePrice: 0, mrp: 0, openingStock: 0, reorderLevel: 0, trackInventory: true }); setEditId(null); setShowForm(true); };
+  // New items default to pieces, the most common unit for a shop.
+  const pcsUnitId = (units || []).find((u: any) => u.abbreviation === 'PCS')?.id ?? '';
+  const openCreate = () => { reset({ type: 'PRODUCT', taxRate: 18, sellingPrice: 0, purchasePrice: 0, mrp: 0, openingStock: 0, reorderLevel: 0, trackInventory: true, unitId: pcsUnitId }); setEditId(null); setShowForm(true); };
   useOpenFromUrl(openCreate);
 
   // /products returns { products, total }; /products/low-stock returns a plain array and ignores search, so filter it here.
@@ -128,7 +138,7 @@ export default function ProductsPage() {
                   <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{Number(p.taxRate || 0)}%</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => { setEditId(p.id); reset({ name: p.name, sku: p.sku || '', description: p.description || '', type: p.type, hsnCode: p.hsnCode || '', sellingPrice: Number(p.sellingPrice) || 0, purchasePrice: Number(p.costPrice) || 0, mrp: Number(p.mrp) || 0, taxRate: Number(p.taxRate) || 18, trackInventory: p.trackInventory ?? true, openingStock: Number(p.openingStock) || 0, reorderLevel: Number(p.reorderPoint) || 0 }); setShowForm(true); }}><Edit2 className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => { setEditId(p.id); setLoadedStock(Number(p.openingStock) || 0); reset({ name: p.name, sku: p.sku || '', description: p.description || '', type: p.type, hsnCode: p.hsnCode || '', sellingPrice: Number(p.sellingPrice) || 0, purchasePrice: Number(p.costPrice) || 0, mrp: Number(p.mrp) || 0, taxRate: Number(p.taxRate) || 18, trackInventory: p.trackInventory ?? true, openingStock: Number(p.openingStock) || 0, reorderLevel: Number(p.reorderPoint) || 0, unitId: p.unitId || '' }); setShowForm(true); }}><Edit2 className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="sm" onClick={() => { if (confirm('Delete?')) deleteMut.mutate(p.id); }}><Trash2 className="w-4 h-4 text-red-500" /></Button>
                     </div>
                   </td>
@@ -156,6 +166,7 @@ export default function ProductsPage() {
                 <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Purchase price (₹)</label><input {...register('purchasePrice')} type="number" step="0.01" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>
                 <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">GST rate</label><select {...register('taxRate')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none">{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}%</option>)}</select></div>
                 {productType !== 'SERVICE' && <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{editId ? 'Stock count' : 'Stock you have now'}</label><input {...register('openingStock')} type="number" className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none" /></div>}
+                {productType !== 'SERVICE' && <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Unit</label><select {...register('unitId')} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none"><option value="">No unit</option>{(units || []).map((u: any) => <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>)}</select></div>}
               </div>
               <details className="border border-gray-200 dark:border-gray-600 rounded-lg">
                 <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-300">More details: type, code, HSN, MRP, low-stock alert</summary>

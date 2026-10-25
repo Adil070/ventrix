@@ -81,7 +81,9 @@ export default function InventoryPage() {
   const adjustMut = useMutation({
     // Without a warehouseId the API books the entry against an arbitrary warehouse, so default to the main one.
     mutationFn: (d: z.infer<typeof AdjustSchema>) => api.inventory.adjustStock(dropEmpty({ ...d, warehouseId: d.warehouseId || defaultWarehouseId })),
-    onSuccess: (r: any) => { refreshStock(); toast.success(`Stock updated. Now ${r?.data?.data?.newStock ?? ''} in stock`); resetAdj({ type: 'ADJUSTMENT_IN' }); },
+    onSuccess: (r: any) => { refreshStock(); toast.success(`Stock updated. Now ${r?.data?.data?.newStock ?? ''} in stock`);
+      // Clear every field: keeping the quantity while the type snaps back to "Add" made a second click reverse the change.
+      resetAdj({ productId: '', type: 'ADJUSTMENT_IN', warehouseId: '', quantity: '' as unknown as number, notes: '' }); },
     onError: (e: any) => toast.error(apiError(e, 'Could not adjust stock')),
   });
   const transferMut = useMutation({

@@ -115,7 +115,7 @@ export default function ReturnsPage() {
     resolver: zodResolver(ReturnSchema),
     defaultValues: { type: 'SALES_RETURN', returnDate: today(), generateCreditNote: true, items: [{ productId: '', quantity: 1, unitPrice: 0, taxRate: 18 }] },
   });
-  const { fields: retFields, append: retAppend, remove: retRemove } = useFieldArray({ control: ctrlRet, name: 'items' });
+  const { fields: retFields, append: retAppend, remove: retRemove, replace: retReplace } = useFieldArray({ control: ctrlRet, name: 'items' });
   const retType = watchRet('type');
   const retItems = watchRet('items');
 
@@ -202,10 +202,21 @@ export default function ReturnsPage() {
     setRetValue(`items.${i}.unitPrice`, Number(price ?? 0));
     if (p.taxRate != null) setRetValue(`items.${i}.taxRate`, Number(p.taxRate));
   };
-  // Picking the original invoice fills in its customer.
-  const onPickInvoice = (invoiceId: string) => {
+  // Picking the original invoice fills in its customer and its item lines (quantity, price and GST as billed);
+  // the user then trims them to what is actually coming back.
+  const onPickInvoice = async (invoiceId: string) => {
     const inv = (invoices || []).find((x: any) => x.id === invoiceId);
     if (inv?.customerId) setRetValue('customerId', inv.customerId);
+    if (!invoiceId) return;
+    try {
+      const full = (await api.invoices.get(invoiceId)).data.data;
+      const lines = (full?.items || [])
+        .filter((it: any) => it.productId)
+        .map((it: any) => ({ productId: it.productId, quantity: Number(it.quantity), unitPrice: Number(it.unitPrice), taxRate: Number(it.taxRate ?? 0) }));
+      if (lines.length) retReplace(lines);
+    } catch {
+      toast.error('Could not load the items of that bill. Add them below.');
+    }
   };
 
   const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 outline-none";

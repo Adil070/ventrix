@@ -5,6 +5,8 @@ import { successResponse } from '../../shared/helpers/response.helper';
 import { authMiddleware } from '../../shared/middleware/auth.middleware';
 import { tenantMiddleware } from '../../shared/middleware/tenant';
 import { Prisma } from '@prisma/client';
+import { noteTaxAdjustments } from '../gst/gst.engine';
+import { roundTo } from '../../shared/helpers/response.helper';
 
 const router = Router();
 router.use(authMiddleware, tenantMiddleware);
@@ -52,12 +54,29 @@ router.get('/sales/summary', async (req: Request, res: Response) => {
   const customerIds = topCustomers.map(c => c.customerId!).filter(Boolean);
   const customers = await prisma.customer.findMany({ where: { id: { in: customerIds } }, select: { id: true, name: true } });
 
+  // Sales returns (credit notes) in the period, so the report can show net sales; the bills themselves are unchanged.
+  const { creditNotes } = await noteTaxAdjustments(req.organizationId!, from, to);
+  const returns = { taxableValue: creditNotes.taxableValue, tax: creditNotes.total, total: roundTo(creditNotes.taxableValue + creditNotes.total) };
+
   res.json(successResponse({
     summary,
+    returns,
     byStatus,
     topProducts: topProducts.map(p => ({ ...p, product: products.find(pr => pr.id === p.productId) })),
     topCustomers: topCustomers.map(c => ({ ...c, customer: customers.find(cu => cu.id === c.customerId) })),
   }));
+});
+
+// Scheduled sales snapshots (07:00–22:00 runs, written by the sales-reports module). ?date=YYYY-MM-DD, default today's and recent.
+router.get('/sales-snapshots', async (req: Request, res: Response) => {
+  const { date } = req.query as { date?: string };
+  const day = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00.000Z`) : undefined;
+  const snapshots = await prisma.salesReportSnapshot.findMany({
+    where: { organizationId: req.organizationId!, ...(day && { reportDate: day }) },
+    orderBy: [{ reportDate: 'desc' }, { slot: 'desc' }],
+    take: day ? 10 : 20,
+  });
+  res.json(successResponse(snapshots));
 });
 
 // ─── Purchase Reports ─────────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ interface EmailJobData {
   to: string;
   data: Record<string, unknown>;
   pdfBuffer?: string; // Base64
+  /** Business the email is sent for: its own email account is used when set up (never the credentials themselves). */
+  organizationId?: string;
 }
 
 interface ReportJobData {
@@ -27,17 +29,8 @@ interface NotificationJobData {
   metadata?: Record<string, unknown>;
 }
 
-interface StockSyncJobData {
-  organizationId: string;
-  productId: string;
-  warehouseId: string;
-}
-
-interface GSTReportJobData {
-  organizationId: string;
-  period: string;
-  type: string;
-}
+// Removed (see FEATURES.md "Future scope"): `stock-sync` (stock is written directly, inside each sale/purchase
+// transaction) and `gst-reports` (GST reports are built on request by the GST module).
 
 const redisConnection = {
   host: new URL(config.REDIS_URL.replace('redis://', 'http://')).hostname,
@@ -51,12 +44,10 @@ const redisConnection = {
 export const emailQueue = new Bull<EmailJobData>('email', { redis: redisConnection });
 export const reportQueue = new Bull<ReportJobData>('reports', { redis: redisConnection });
 export const notificationQueue = new Bull<NotificationJobData>('notifications', { redis: redisConnection });
-export const stockSyncQueue = new Bull<StockSyncJobData>('stock-sync', { redis: redisConnection });
-export const gstReportQueue = new Bull<GSTReportJobData>('gst-reports', { redis: redisConnection });
 
 // Email queue processor
 emailQueue.process(async (job: Job<EmailJobData>) => {
-  const { type, to, data, pdfBuffer } = job.data;
+  const { type, to, data, pdfBuffer, organizationId } = job.data;
 
   try {
     switch (type) {
@@ -71,10 +62,13 @@ emailQueue.process(async (job: Job<EmailJobData>) => {
         break;
       case 'invoice':
         const buffer = pdfBuffer ? Buffer.from(pdfBuffer, 'base64') : undefined;
-        await emailService.sendInvoiceEmail(to, data as any, buffer);
+        await emailService.sendInvoiceEmail(to, data as any, buffer, organizationId);
         break;
       case 'payment-reminder':
-        await emailService.sendPaymentReminderEmail(to, data as any);
+        await emailService.sendPaymentReminderEmail(to, data as any, organizationId);
+        break;
+      case 'sales-report':
+        await emailService.sendSalesReportEmail(to, data as any, organizationId);
         break;
       default:
         logger.warn({ type }, 'Unknown email job type');
@@ -94,15 +88,8 @@ notificationQueue.process(async (job: Job<NotificationJobData>) => {
   // Add real push notification logic here (FCM, etc.)
 });
 
-// Stock sync queue processor
-stockSyncQueue.process(async (job: Job<StockSyncJobData>) => {
-  const { organizationId, productId, warehouseId } = job.data;
-  logger.info({ jobId: job.id, organizationId, productId }, 'Stock sync job');
-  // Recalculate and cache stock levels
-});
-
 // Error handlers
-[emailQueue, reportQueue, notificationQueue, stockSyncQueue, gstReportQueue].forEach((queue) => {
+[emailQueue, reportQueue, notificationQueue].forEach((queue) => {
   queue.on('error', (error) => {
     logger.error({ queue: queue.name, error }, 'Queue error');
   });
@@ -123,10 +110,4 @@ export const jobs = {
 
   sendNotification: (data: NotificationJobData) =>
     notificationQueue.add(data, { attempts: 3 }),
-
-  syncStock: (data: StockSyncJobData) =>
-    stockSyncQueue.add(data, { attempts: 2 }),
-
-  generateGSTReport: (data: GSTReportJobData) =>
-    gstReportQueue.add(data, { attempts: 2, timeout: 60000 }),
 };

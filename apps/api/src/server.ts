@@ -1,13 +1,11 @@
 import 'dotenv/config';
 import http from 'http';
-import { Server as SocketServer } from 'socket.io';
 
 import { createApp } from './app';
 import { config } from './config';
 import { logger } from './infrastructure/logger';
 import { prisma } from './infrastructure/database';
 import { redis } from './infrastructure/cache';
-import { setupSocketHandlers } from './infrastructure/socket';
 import { startJobQueues } from './infrastructure/queues';
 
 async function main(): Promise<void> {
@@ -24,17 +22,24 @@ async function main(): Promise<void> {
     const app = createApp();
     const server = http.createServer(app);
 
-    // ── Socket.io setup
-    const io = new SocketServer(server, {
-      cors: {
-        origin: config.CORS_ORIGINS,
-        credentials: true,
-      },
-      transports: ['websocket', 'polling'],
-    });
+    // ── Socket.io setup (future feature — only loaded when FEATURE_REALTIME=true)
+    if (config.FEATURE_REALTIME) {
+      const { Server: SocketServer } = await import('socket.io');
+      const { setupSocketHandlers } = await import('./infrastructure/socket');
 
-    setupSocketHandlers(io);
-    logger.info('✅ Socket.io initialized');
+      const io = new SocketServer(server, {
+        cors: {
+          origin: config.CORS_ORIGINS,
+          credentials: true,
+        },
+        transports: ['websocket', 'polling'],
+      });
+
+      setupSocketHandlers(io);
+      logger.info('✅ Socket.io initialized');
+    } else {
+      logger.info('⏸  Socket.io disabled (FEATURE_REALTIME=false)');
+    }
 
     // ── Job queues
     await startJobQueues();

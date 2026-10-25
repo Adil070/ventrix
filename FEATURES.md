@@ -84,6 +84,13 @@ Products carry `openingStock` as the live stock counter. Every **StockEntry** re
 - **Stock adjustment** — write-off, damage, surplus entries.
 - **Opening stock entry** on product creation.
 
+### Data integrity rules
+- Stock is written directly by the user's action (sale, purchase, return, adjustment, product edit). There is no background "stock sync": `product.openingStock` and the signed StockEntry ledger change together in one transaction.
+- Every stock-changing path row-locks the products first (`lockProducts`), so concurrent sales cannot both take the last unit.
+- **Sales are blocked on short stock.** The API answers `409 INSUFFICIENT_STOCK` with `details.shortages` (product, warehouse, requested, available, shortBy) and writes nothing. The billing screen offers "Add stock & save sale": it books the shortfall as an `ADJUSTMENT_IN` ("Stock added while billing", visible in stock history) and saves the sale again.
+- With no active warehouse, a purchase or a product with opening stock fails with an error rather than saving without stock.
+- The product form sends the stock count only when the user changes it, and the API re-reads stock under the lock, so editing a price never undoes a sale made meanwhile.
+
 ### Endpoints (sample)
 | Method | Path | Description |
 |--------|------|-------------|
@@ -298,6 +305,11 @@ All reports hit aggregation queries (Prisma `groupBy`, `aggregate`) for performa
 | Balance Sheet | Assets, liabilities, equity |
 | Cash Flow | Operating / investing / financing |
 
+### Scheduled sales report
+Runs at **07:00, 11:00, 15:00, 19:00 and 22:00 (day close)** in the organization's timezone (default IST). Each run stores a snapshot of today's sales so far (bills, total, GST, discount, collected by payment mode, still to collect, top 5 items). The snapshot is shown under Reports → Sales → "Sales updates" (`GET /api/v1/reports/sales-snapshots`) and emailed to ORG_OWNER / BRANCH_ADMIN users.
+
+No timer runs inside the API, because free hosts sleep. An external scheduler calls `POST /api/v1/internal/sales-reports/run` with the `X-Cron-Secret` header (`CRON_SECRET`, at least 32 characters; unset disables the endpoint). The default scheduler is `.github/workflows/sales-report.yml`, with repo secrets `API_URL` and `CRON_SECRET`. A call is filed under the latest slot that has passed, so late runs still count. A repeated call for a slot is a no-op (unique `organizationId + reportDate + slot`). Calls before 07:00 do nothing.
+
 ---
 
 ## 15. Employees & Payroll
@@ -345,14 +357,26 @@ Files are uploaded via multipart form-data, stored on S3 (or MinIO in dev), and 
 ## 18. Notifications
 
 ### How it works
-Notifications are stored in the DB and pushed to connected clients via **Socket.IO**. The frontend shows a real-time notification bell.
+Notifications are stored in the DB and fetched by the frontend when the page loads. (Real-time push is a future feature — see [Real-Time Features](#real-time-features-websocket--future-feature-flag).)
 
 ### Features
 - In-app notifications (invoice overdue, low stock, payment received).
 - Mark as read / mark all as read.
-- Real-time delivery via WebSocket.
 - Email notifications via Nodemailer (SMTP).
 - Queue-based delivery (Bull + Redis) to avoid blocking request threads.
+
+### Email senders
+| Email | Sent from |
+|-------|-----------|
+| Welcome, OTP, password reset | Platform account (`SMTP_*` env, e.g. the Ventrix Gmail) |
+| Sales report (later: invoices, payment reminders) | The business's own account if set up and verified, otherwise the platform account under the business's name with Reply-To set to the business |
+
+- **Settings → Email** (owners/admins only): Gmail preset (address + App Password) or any SMTP provider. Endpoints: `GET/PUT/DELETE /api/v1/organizations/email-settings`, `POST /api/v1/organizations/email-settings/test`.
+- The password is stored AES-256-GCM encrypted (`ENCRYPTION_KEY`), never returned by the API, and never put in the queue: jobs carry only `organizationId`.
+- Saving clears "verified". Business emails use the account only after **Send test email** succeeds; the test goes to the admin's own login email.
+- If the business account fails at send time, the email goes from the platform account instead and the reason is shown in Settings. A rejected login also un-verifies the account until it is re-tested.
+- In production, a business's SMTP host must be a public address on port 465, 587 or 2525. This stops the test button being used to reach the server's own network.
+- Templates live in `apps/api/src/infrastructure/email/templates.ts`, compiled with the app.
 
 ---
 
@@ -398,7 +422,11 @@ Every `StockEntry` is tagged with a `warehouseId`. Stock is tracked per warehous
 
 ---
 
-## Real-Time Features (WebSocket)
+## Real-Time Features (WebSocket) — future, feature flag
+
+**Disabled by default (`FEATURE_REALTIME=false`).** Screens such as the dashboard load their data from the DB when opened; nothing needs live push today. Keeping it off keeps the API free-tier hosting friendly (no long-lived WebSocket connections). The code is kept in `apps/api/src/infrastructure/socket/` for when a feature needs it.
+
+To enable later: set `FEATURE_REALTIME=true`, call the `SocketEmitter` helpers from services, and add a `socket.io-client` connection in the frontend (neither is wired up yet).
 
 - **Socket.IO** server attached to the Express HTTP server.
 - Clients authenticate via JWT on socket handshake.
@@ -409,12 +437,22 @@ Every `StockEntry` is tagged with a `warehouseId`. Stock is tracked per warehous
 
 ## Background Jobs (Bull + Redis)
 
-| Queue | Jobs |
-|-------|------|
-| `email` | Send invoice email, password reset, welcome email |
-| `notification` | Push in-app notifications |
-| `report` | Generate heavy reports asynchronously |
-| `invoice` | Auto-mark overdue invoices |
+| Queue | Jobs | Status |
+|-------|------|--------|
+| `email` | Welcome, OTP, password reset, scheduled sales report | Live |
+| `notifications` | Push notifications (FCM etc.) | Placeholder: worker only logs, nothing adds jobs |
+| `reports` | Heavy report exports | Placeholder: no worker, nothing adds jobs |
+
+The `invoice` and `payment-reminder` email types are handled by the worker but nothing sends them yet. There is no overdue-invoice job.
+
+---
+
+## Future scope
+
+| Item | Notes |
+|------|-------|
+| Real-time push (Socket.IO) | Behind `FEATURE_REALTIME` (off). See [Real-Time Features](#real-time-features-websocket--future-feature-flag). |
+| GST reports in the background | The `gst-reports` queue was removed: it had no worker. GSTR-1 / GSTR-3B / GST summary are built on request by the GST module (`/api/v1/gst/reports/*`) and stay live. Add a queue only when monthly volumes make those requests too slow. |
 
 ---
 

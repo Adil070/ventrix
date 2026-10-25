@@ -99,7 +99,7 @@ router.get('/reports/gst-summary', async (req: Request, res: Response) => {
     creditNotes,
     debitNotes,
     netGSTPayable: roundTo(outputGST - inputGST),
-    taxableAmount: salesGST._sum.taxableAmount,
+    taxableAmount: sub(salesGST._sum.taxableAmount, creditNotes.taxableValue), // net of returns, like the tax
     totalSales: salesGST._sum.totalAmount,
     totalPurchases: purchaseGST._sum.totalAmount,
   }));
@@ -134,7 +134,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     creditNotes,
     debitNotes,
     netGSTPayable: roundTo(outputGST - inputGST),
-    taxableAmount: salesGST._sum.taxableAmount,
+    taxableAmount: sub(salesGST._sum.taxableAmount, creditNotes.taxableValue), // net of returns, like the tax
     totalSales: salesGST._sum.totalAmount,
     totalPurchases: purchaseGST._sum.totalAmount,
   }));

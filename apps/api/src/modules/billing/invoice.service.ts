@@ -1,12 +1,12 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../infrastructure/database';
 import { cache, CacheService } from '../../infrastructure/cache';
-import { NotFoundError, BadRequestError } from '../../shared/errors';
+import { NotFoundError, BadRequestError, InsufficientStockError, type StockShortage } from '../../shared/errors';
 import { roundTo, toDecimal } from '../../shared/helpers/response.helper';
 import { nextSequenceNumber, retryOnUniqueViolation } from '../../shared/helpers/sequence';
 import type { CreateInvoiceInput, UpdateInvoiceInput, InvoiceQueryInput, RecordPaymentInput } from './invoice.dto';
 import { AccountingEngine } from '../accounting/accounting.engine';
-import { InventoryEngine, lockProducts, resolveWarehouse } from '../inventory/inventory.engine';
+import { InventoryEngine, getWarehouseProductStock, lockProducts, resolveWarehouse } from '../inventory/inventory.engine';
 
 export class InvoiceService {
   private readonly accountingEngine = new AccountingEngine();
@@ -614,21 +614,51 @@ export class InvoiceService {
   /**
    * Takes sold quantities out of stock for inventory-tracked products: a SALE stock entry in the line's
    * warehouse (validated to belong to the org, else the default warehouse) + product.openingStock, always
-   * together. Untracked products/services touch neither. Short stock does not block the sale (policy).
+   * together. Untracked products/services touch neither.
+   * Policy: a sale never takes more than the warehouse holds. Every short line is reported at once
+   * (InsufficientStockError, 409) and nothing is written, so the user can add the stock and save again.
    */
   private async deductStockForInvoice(tx: Prisma.TransactionClient, organizationId: string, invoiceId: string, items: any[], userId: string) {
     const productIds = [...new Set(items.map((i) => i.productId).filter(Boolean))] as string[];
     if (!productIds.length) return;
-    const tracked = new Set(
-      (await tx.product.findMany({ where: { id: { in: productIds }, organizationId, trackInventory: true }, select: { id: true } })).map((p) => p.id),
+    const tracked = new Map(
+      (await tx.product.findMany({ where: { id: { in: productIds }, organizationId, trackInventory: true }, select: { id: true, name: true } })).map((p) => [p.id, p.name]),
     );
     if (!tracked.size) return;
-    await lockProducts(tx, [...tracked]);
+    await lockProducts(tx, [...tracked.keys()]);
 
+    // Resolve each line's warehouse once and total the quantity per product + warehouse (an item can be on several lines).
+    const lines: Array<{ item: any; warehouse: { id: string; name: string } }> = [];
+    const needed = new Map<string, { productId: string; warehouse: { id: string; name: string }; quantity: number }>();
     for (const item of items) {
       if (!item.productId || !tracked.has(item.productId)) continue;
       const warehouse = await resolveWarehouse(tx, organizationId, item.warehouseId);
+      lines.push({ item, warehouse });
+      const key = `${item.productId}|${warehouse.id}`;
+      const entry = needed.get(key) ?? { productId: item.productId, warehouse, quantity: 0 };
+      entry.quantity = roundTo(entry.quantity + toDecimal(item.quantity), 3);
+      needed.set(key, entry);
+    }
 
+    // Checked under the product locks, so two concurrent sales cannot both take the last unit.
+    const shortages: StockShortage[] = [];
+    for (const n of needed.values()) {
+      const available = await getWarehouseProductStock(tx, organizationId, n.productId, n.warehouse.id);
+      if (n.quantity > available + 1e-9) {
+        shortages.push({
+          productId: n.productId,
+          productName: tracked.get(n.productId)!,
+          warehouseId: n.warehouse.id,
+          warehouseName: n.warehouse.name,
+          requested: n.quantity,
+          available,
+          shortBy: roundTo(n.quantity - available, 3),
+        });
+      }
+    }
+    if (shortages.length) throw new InsufficientStockError(shortages);
+
+    for (const { item, warehouse } of lines) {
       // Atomic decrement: read-modify-write would lose concurrent sales.
       await tx.product.update({
         where: { id: item.productId },

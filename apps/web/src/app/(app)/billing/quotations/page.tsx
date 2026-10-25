@@ -10,6 +10,8 @@ import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { today } from '@/lib/business';
 import { PageHeader, Button, Card, StatusBadge, EmptyState } from '@/components/shared';
+import { ItemPicker, itemPrice } from '@/components/shared/Pickers';
+import { useOrgSettings } from '@/hooks/useOrganization';
 import { Plus, X, FileText, Send, ArrowRight } from 'lucide-react';
 
 const QuotationSchema = z.object({
@@ -18,6 +20,8 @@ const QuotationSchema = z.object({
   validUntil: z.string().min(1, 'Required'),
   notes: z.string().optional(),
   items: z.array(z.object({
+    // Every line is a catalogue item, so converting the quotation to an invoice moves stock.
+    productId: z.string().min(1, 'Pick an item'),
     description: z.string().min(1, 'Required'),
     quantity: z.number({ invalid_type_error: 'Required' }).positive('Must be more than 0'),
     unitPrice: z.number({ invalid_type_error: 'Required' }).min(0),
@@ -36,6 +40,7 @@ const apiError = (e: any, fallback: string) => {
 
 export default function QuotationsPage() {
   const qc = useQueryClient();
+  const { experience } = useOrgSettings();
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
 
@@ -49,7 +54,7 @@ export default function QuotationsPage() {
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<QuotationForm>({
     resolver: zodResolver(QuotationSchema),
-    defaultValues: { quotationDate: today(), validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0], items: [{ description: '', quantity: 1, unitPrice: 0, taxRate: 18 }] },
+    defaultValues: { quotationDate: today(), validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0], items: [{ productId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 18 }] },
   });
 
   const items = watch('items');
@@ -60,7 +65,7 @@ export default function QuotationsPage() {
       quotationDate: d.quotationDate,
       validUntil: d.validUntil || undefined,
       notes: d.notes?.trim() || undefined,
-      items: d.items.map(i => ({ description: i.description.trim(), quantity: Number(i.quantity), unitPrice: Number(i.unitPrice), taxRate: Number(i.taxRate ?? 0) })),
+      items: d.items.map(i => ({ productId: i.productId, description: i.description.trim(), quantity: Number(i.quantity), unitPrice: Number(i.unitPrice), taxRate: Number(i.taxRate ?? 0) })),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['quotations'] }); toast.success('Quotation created'); setShowForm(false); reset(); },
     onError: (e: any) => toast.error(apiError(e, 'Could not create quotation')),
@@ -154,18 +159,33 @@ export default function QuotationsPage() {
               {/* Items */}
               <div>
                 <div className="flex justify-between items-center mb-2"><label className="text-sm font-medium text-gray-700 dark:text-gray-300">Items</label>
-                  <button type="button" onClick={() => setValue('items', [...items, { description: '', quantity: 1, unitPrice: 0, taxRate: 18 }])} className="text-xs text-orange-600 hover:text-orange-700">+ Add Item</button>
+                  <button type="button" onClick={() => setValue('items', [...items, { productId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 18 }])} className="text-xs text-orange-600 hover:text-orange-700">+ Add Item</button>
                 </div>
                 {items?.map((item: any, i: number) => (
                   <div key={i} className="grid grid-cols-12 gap-2 mb-2 items-center">
-                    <div className="col-span-5"><input {...register(`items.${i}.description`)} className={inputCls} placeholder="Description" /></div>
+                    <div className="col-span-5">
+                      <ItemPicker
+                        value={item.productId || null}
+                        selectedLabel={item.description}
+                        priceField="sellingPrice"
+                        trackInventory={experience !== 'simple'}
+                        onChange={opt => {
+                          if (!opt) return;
+                          const p = opt.data || {};
+                          setValue(`items.${i}.productId`, opt.id, { shouldValidate: true });
+                          setValue(`items.${i}.description`, opt.label);
+                          setValue(`items.${i}.unitPrice`, itemPrice(p, 'sellingPrice'));
+                          setValue(`items.${i}.taxRate`, Number(p.taxRate ?? 18));
+                        }}
+                      />
+                    </div>
                     <div className="col-span-2"><input type="number" {...register(`items.${i}.quantity`, { valueAsNumber: true })} className={inputCls} placeholder="Qty" /></div>
                     <div className="col-span-2"><input type="number" step="0.01" {...register(`items.${i}.unitPrice`, { valueAsNumber: true })} className={inputCls} placeholder="Price" /></div>
                     <div className="col-span-2"><select {...register(`items.${i}.taxRate`, { valueAsNumber: true })} className={inputCls}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}%</option>)}</select></div>
                     {items.length > 1 && <button type="button" onClick={() => setValue('items', items.filter((_: any, j: number) => j !== i))} className="text-red-500 text-xs">✕</button>}
                   </div>
                 ))}
-                {errors.items && <p className="text-xs text-red-500">Fill in a description, quantity and price for every item.</p>}
+                {errors.items && <p className="text-xs text-red-500">Pick an item and enter a quantity and price on every line.</p>}
                 <div className="text-right text-sm font-semibold text-gray-900 dark:text-white mt-2">Total (incl. GST): {formatCurrency(total)}</div>
               </div>
 

@@ -38,7 +38,7 @@ export default function ExpensesPage() {
     select: r => ({ expenses: (r.data.data || []) as any[], total: Number(r.data.pagination?.total || 0) }),
   });
   const { data: kpis } = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard.getSummary(), select: r => r.data.data?.kpis });
-  const { data: categories } = useQuery({ queryKey: ['expense-categories'], queryFn: () => api.expenses.listCategories(), select: r => r.data.data?.categories || [] });
+  const { data: categories } = useQuery({ queryKey: ['expense-categories'], queryFn: () => api.expenses.listCategories(), select: r => (Array.isArray(r.data.data) ? r.data.data : []) as any[] });
 
   const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<ExpenseForm>({ resolver: zodResolver(ExpenseSchema), defaultValues: { paymentMode: 'CASH', date: today(), taxable: false, gstRate: 0 } });
   const taxable = watch('taxable');
